@@ -1,6 +1,9 @@
 fastapi
 uvicorn
 langchain
+langchain-core
 langchain-mcp-adapters
+langchain-google-genai
 mcp
 streamlit
+python-dotenv
