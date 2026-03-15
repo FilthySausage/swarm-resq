@@ -11,20 +11,36 @@ Run with:
 
 import asyncio
 import time
-from typing import Optional
-import requests
+from typing import Optional, AsyncGenerator
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
+import plotly.express as px
+import numpy as np
+import json
 
-try:
-    from orchestrator.agent import stream_agent
-except ImportError:
-    stream_agent = None
+import sys
+sys.path.append(r"D:\Siew Feng\swarm-resq")
+from ui.environment_manager import EnvironmentManager
+from langchain_core.tools import tool
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Initialize environment manager as Streamlit singleton
+@st.cache_resource
+def get_environment_manager():
+    return EnvironmentManager(width=20, height=20)
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-MCP_STATE_URL = "http://localhost:8000/mcp"
+GRID_WIDTH = 20
+GRID_HEIGHT = 20
 POLL_INTERVAL = 2  # seconds between auto-refresh
 
 CELL_COLORS = {
@@ -35,6 +51,9 @@ CELL_COLORS = {
     "D": "🔵",  # Drone
     "R": "🟢",  # Rescued
 }
+
+# Initialize environment manager
+env_manager = get_environment_manager()
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -57,6 +76,10 @@ if "mission_log" not in st.session_state:
     st.session_state.mission_log = ""
 if "mission_complete" not in st.session_state:
     st.session_state.mission_complete = False
+if "environment_initialized" not in st.session_state:
+    st.session_state.environment_initialized = False
+if "last_state" not in st.session_state:
+    st.session_state.last_state = None
 
 # ---------------------------------------------------------------------------
 # Sidebar controls
@@ -64,12 +87,45 @@ if "mission_complete" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ Control Panel")
     
+    # Environment initialization
+    st.subheader("🌍 Environment Setup")
+    col_init1, col_init2 = st.columns(2)
+    with col_init1:
+        grid_width = st.number_input("Grid Width", 10, 50, 20)
+    with col_init2:
+        grid_height = st.number_input("Grid Height", 10, 50, 20)
+    
+    col_init3, col_init4 = st.columns(2)
+    with col_init3:
+        drone_count = st.number_input("Number of Drones", 1, 10, 3)
+    with col_init4:
+        survivor_count = st.number_input("Number of Survivors", 1, 20, 5)
+    
+    init_btn = st.button(
+        "🔧 Initialize Environment",
+        use_container_width=True,
+    )
+    
+    if init_btn:
+        result = env_manager.initialize_mission(
+            width=int(grid_width),
+            height=int(grid_height),
+            drone_count=int(drone_count),
+            survivor_count=int(survivor_count),
+        )
+        st.session_state.environment_initialized = True
+        st.success("✅ Environment initialized!")
+        st.rerun()
+    
+    st.divider()
+    
     # Mission briefing input
     st.subheader("🎯 Mission Briefing")
     mission_briefing = st.text_area(
         "Additional instructions for ARIA",
         placeholder="e.g., Prioritize high-battery drones for distant sectors.",
         height=100,
+        disabled=not st.session_state.environment_initialized,
     )
     
     col1, col2 = st.columns(2)
@@ -77,7 +133,7 @@ with st.sidebar:
         launch_btn = st.button(
             "🚀 Launch ARIA",
             type="primary",
-            disabled=st.session_state.mission_active,
+            disabled=st.session_state.mission_active or not st.session_state.environment_initialized,
             use_container_width=True,
         )
     with col2:
@@ -129,27 +185,16 @@ col_log = st.container()
 # ---------------------------------------------------------------------------
 
 def fetch_state() -> Optional[dict]:
-    """Fetch current swarm state from MCP server."""
+    """Fetch current swarm state from local environment manager."""
+    if not st.session_state.environment_initialized:
+        return None
+    
     try:
-        resp = requests.post(
-            MCP_STATE_URL,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {"name": "get_swarm_state", "arguments": {}},
-            },
-            timeout=3,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        result_text = data.get("result", {}).get("content", [{}])[0].get("text")
-        if isinstance(result_text, str):
-            import json
-            return json.loads(result_text)
-        return result_text
+        state = env_manager.get_state()
+        st.session_state.last_state = state
+        return state
     except Exception as e:
-        st.warning(f"Cannot reach MCP server: {e}", icon="⚠️")
+        st.warning(f"Error fetching state: {e}", icon="⚠️")
         return None
 
 
@@ -164,6 +209,204 @@ def render_grid_emoji(grid_data: dict) -> str:
         row_str = " ".join(CELL_COLORS.get(c.get("type", "."), "❓") for c in row)
         rows.append(row_str)
     return "\n".join(rows)
+
+
+def render_grid_plotly(grid_data: dict, drones: list, survivors: list) -> go.Figure:
+    """Render interactive grid visualization with drones and survivors using Plotly."""
+    if not grid_data or "cells" not in grid_data:
+        return None
+    
+    cells = grid_data.get("cells", [])
+    height = len(cells)
+    width = len(cells[0]) if cells else 0
+    
+    # Create grid visualization matrix (z values for heatmap)
+    grid_visual = [[0 for _ in range(width)] for _ in range(height)]
+    grid_labels = [[" " for _ in range(width)] for _ in range(height)]
+    
+    # Map cell types to numeric values for color coding
+    cell_color_map = {
+        ".": 0,   # Empty - light
+        "#": 3,   # Obstacle - dark
+        "S": 2,   # Survivor - orange target
+        "X": 1,   # Hazard - red warning
+        "R": 4,   # Rescued - green
+    }
+    
+    # Fill the grid
+    for y, row in enumerate(cells):
+        for x, cell in enumerate(row):
+            cell_type = cell.get("type", ".")
+            grid_visual[y][x] = cell_color_map.get(cell_type, 0)
+            grid_labels[y][x] = cell_type
+    
+    # Create figure with custom colorscale
+    fig = go.Figure()
+    
+    # Add heatmap for the grid
+    fig.add_trace(go.Heatmap(
+        z=grid_visual,
+        colorscale=[
+            [0.0, "#FFFFFF"],   # Empty - white
+            [0.25, "#FF4444"],  # Hazard - red
+            [0.5, "#FF9900"],   # Survivor - orange
+            [0.75, "#444444"],  # Obstacle - dark gray
+            [1.0, "#00CC00"],   # Rescued - green
+        ],
+        colorbar=dict(
+            title="Cell Type",
+            tickvals=[0, 1, 2, 3, 4],
+            ticktext=["Empty", "Hazard", "Survivor", "Obstacle", "Rescued"],
+            len=0.5,
+        ),
+        showscale=True,
+        hovertext=grid_labels,
+        hoverinfo="text",
+        name="Grid",
+    ))
+    
+    # Add drone markers
+    if drones:
+        drone_xs = []
+        drone_ys = []
+        drone_ids = []
+        drone_batteries = []
+        drone_colors = []
+        
+        for drone in drones:
+            x = drone.get("x")
+            y = drone.get("y")
+            if x is not None and y is not None:
+                drone_xs.append(x)
+                drone_ys.append(y)
+                drone_ids.append(drone.get("drone_id", "?"))
+                battery = drone.get("battery", 0)
+                drone_batteries.append(battery)
+                
+                # Color by battery level
+                if battery > 60:
+                    drone_colors.append("blue")
+                elif battery > 30:
+                    drone_colors.append("orange")
+                else:
+                    drone_colors.append("red")
+        
+        if drone_xs:
+            fig.add_trace(go.Scatter(
+                x=drone_xs,
+                y=drone_ys,
+                mode="markers+text",
+                marker=dict(
+                    size=12,
+                    color=drone_colors,
+                    symbol="diamond",
+                    line=dict(width=2, color="white"),
+                ),
+                text=drone_ids,
+                textposition="top center",
+                textfont=dict(size=10, color="black"),
+                hovertext=[
+                    f"<b>{drone_ids[i]}</b><br>Pos: ({drone_xs[i]}, {drone_ys[i]})<br>Battery: {drone_batteries[i]}%"
+                    for i in range(len(drone_ids))
+                ],
+                hoverinfo="text",
+                name="Drones",
+            ))
+    
+    # Add survivor markers if available
+    if survivors:
+        survivor_xs = []
+        survivor_ys = []
+        survivor_ids = []
+        
+        for survivor in survivors:
+            x = survivor.get("x")
+            y = survivor.get("y")
+            if x is not None and y is not None:
+                survivor_xs.append(x)
+                survivor_ys.append(y)
+                survivor_ids.append(survivor.get("id", "S"))
+        
+        if survivor_xs:
+            fig.add_trace(go.Scatter(
+                x=survivor_xs,
+                y=survivor_ys,
+                mode="markers+text",
+                marker=dict(
+                    size=14,
+                    color="orange",
+                    symbol="star",
+                    line=dict(width=2, color="darkorange"),
+                ),
+                text=survivor_ids,
+                textposition="top center",
+                textfont=dict(size=9, color="darkred"),
+                hovertext=[
+                    f"<b>Survivor {survivor_ids[i]}</b><br>Pos: ({survivor_xs[i]}, {survivor_ys[i]})"
+                    for i in range(len(survivor_ids))
+                ],
+                hoverinfo="text",
+                name="Survivors",
+            ))
+    
+    # Update layout
+    fig.update_layout(
+        title=dict(
+            text="🗺️ Swarm-ResQ Mission Map - Real-time Drone Tracking",
+            font=dict(size=20),
+        ),
+        xaxis=dict(
+            title="X Position",
+            showgrid=True,
+            gridwidth=1,
+            gridcolor="lightgray",
+        ),
+        yaxis=dict(
+            title="Y Position",
+            showgrid=True,
+            gridwidth=1,
+            gridcolor="lightgray",
+            autorange="reversed",  # Invert Y axis so (0,0) is top-left
+        ),
+        width=800,
+        height=700,
+        hovermode="closest",
+        margin=dict(l=50, r=50, t=80, b=50),
+    )
+    
+    return fig
+
+
+def render_drone_heatmap(drones: list, grid_size: tuple) -> go.Figure:
+    """Render heatmap of drone coverage/density."""
+    if not drones or not grid_size:
+        return None
+    
+    width, height = grid_size
+    coverage = np.zeros((height, width))
+    
+    # Increment coverage for drone proximity
+    for drone in drones:
+        x = drone.get("x")
+        y = drone.get("y")
+        if x is not None and y is not None:
+            coverage[int(y), int(x)] += 1
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=coverage,
+        colorscale="Viridis",
+        name="Coverage Density",
+    ))
+    
+    fig.update_layout(
+        title="Drone Coverage Density",
+        xaxis_title="X Position",
+        yaxis_title="Y Position",
+        height=400,
+        width=500,
+    )
+    
+    return fig
 
 
 def render_drone_table(drones: list) -> pd.DataFrame:
@@ -215,40 +458,201 @@ def render_mission_summary(state: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Agent streaming function
+# Agent streaming function using Langchain + MCP
 # ---------------------------------------------------------------------------
 
+def create_langchain_tools():
+    """Create Langchain tools that interface with local environment manager."""
+    
+    @tool
+    def get_swarm_state() -> str:
+        """Get the current swarm state including all drones, grid, and survivors."""
+        state = env_manager.get_state()
+        return json.dumps(state)
+    
+    @tool
+    def move_drone(drone_id: str, dx: int, dy: int) -> str:
+        """Move a drone by relative coordinates (dx, dy) where each is -1, 0, or 1."""
+        result = env_manager.move_drone(drone_id, dx, dy)
+        return json.dumps(result)
+    
+    @tool
+    def scan_area(drone_id: str, radius: int = 2) -> str:
+        """Scan the area around a drone to reveal surrounding cells."""
+        result = env_manager.scan_area(drone_id, radius)
+        return json.dumps(result)
+    
+    @tool
+    def rescue_survivor(drone_id: str, target_x: int, target_y: int) -> str:
+        """Rescue a survivor at the target location (drone must be adjacent)."""
+        result = env_manager.rescue_survivor(drone_id, target_x, target_y)
+        return json.dumps(result)
+    
+    @tool
+    def return_to_base(drone_id: str) -> str:
+        """Return a drone to base (0,0) and deliver cargo if carrying."""
+        result = env_manager.return_to_base(drone_id)
+        return json.dumps(result)
+    
+    @tool
+    def get_survivor_counts() -> str:
+        """Get counts of total, rescued, and remaining survivors."""
+        result = env_manager.get_survivor_counts()
+        return json.dumps(result)
+    
+    @tool
+    def get_drone_state(drone_id: str) -> str:
+        """Get the state of a specific drone."""
+        result = env_manager.get_drone_state(drone_id)
+        return json.dumps(result)
+    
+    return [
+        get_swarm_state,
+        move_drone,
+        scan_area,
+        rescue_survivor,
+        return_to_base,
+        get_survivor_counts,
+        get_drone_state,
+    ]
+
+
 async def run_stream_agent(briefing: str):
-    """Run agent with streaming output to Streamlit."""
-    log_placeholder = col_log.empty()
-    status_placeholder = col_grid.empty()
+    """Run Langchain ARIA agent with local environment manager."""
     
-    full_log = ""
+    # Get placeholders for real-time updates
+    status_placeholder = st.empty()
+    log_placeholder = st.empty()
     
-    if stream_agent is None:
-        status_placeholder.error("❌ Cannot import stream_agent. Is orchestrator module available?")
-        return
-    
-    status_placeholder.info("🌀 Launching ARIA Agent...")
+    full_log = "🚁 ARIA Agent Initialized\n"
+    full_log += f"User Briefing: {briefing if briefing else 'Standard rescue protocol'}\n\n"
     
     try:
-        async for chunk in stream_agent(briefing):
-            full_log += chunk
-            # Update log in real-time
+        # Initialize Langchain components
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            status_placeholder.error("❌ GOOGLE_API_KEY not set. Add it to .env file.")
+            return full_log
+        
+        # Create LLM
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=api_key,
+            temperature=0.7,
+        )
+        
+        # Create tools
+        tools = create_langchain_tools()
+        
+        # Create agent prompt
+        system_prompt = """You are ARIA (Autonomous Rescue Intelligence Agent), commanding a drone swarm in a rescue operation.
+
+OBJECTIVES (priority order):
+1. Explore the entire grid to find all survivors and hazards
+2. Rescue every survivor and return them to base (0,0)
+3. Manage drone battery levels (return to base when < 20%)
+4. Avoid hazards and obstacles
+
+RULES:
+- Always start by calling get_swarm_state() to see current situation
+- Drone movements use move_drone() with dx,dy each being -1, 0, or 1
+- Scan before moving to unknown areas
+- When you find survivors (S), move adjacent and use rescue_survivor()
+- When carrying cargo, return to base with return_to_base()
+- Continuously monitor battery levels, especially drones with battery < 20%
+
+At each turn, provide:
+1. Current situation analysis
+2. Planned actions for each drone
+3. Critical issues or hazards detected
+
+Be concise but strategic."""
+        
+        prompt_template = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("user", f"Mission briefing: {briefing if briefing else 'Execute standard rescue protocol with drone swarm.'}")
+        ])
+        
+        # Bind tools to LLM
+        llm_with_tools = llm.bind_tools(tools)
+        
+        # Run agent loop
+        status_placeholder.info("🌀 ARIA Agent Starting Mission...")
+        
+        messages = []
+        mission_active = True
+        turn_count = 0
+        
+        while mission_active and turn_count < 15:  # Limit to 15 turns
+            turn_count += 1
+            turn_log = f"\n--- TURN {turn_count} ---\n"
+            
+            # Get state
+            state = env_manager.get_state()
+            survivors_remaining = state.get("survivors_at_base", [])
+            all_survivors = len(state.get("survivors", []))
+            
+            # Check win condition
+            rescuedcount = len(state.get("survivors_at_base", []))
+            if rescuedcount == all_survivors:
+                turn_log += "✅ ALL SURVIVORS RESCUED! Mission complete!\n"
+                full_log += turn_log
+                mission_active = False
+                break
+            
+            # Add user message for this turn
+            user_msg = f"Turn {turn_count}: {rescuedcount}/{all_survivors} survivors rescued. Execute next action."
+            messages.append(("user", user_msg))
+            
+            # Get LLM response
+            response = llm_with_tools.invoke(messages)
+            
+            # Add assistant response to messages
+            messages.append(("assistant", response))
+            
+            # Process tool calls if any
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call['name']
+                    tool_args = tool_call['args']
+                    turn_log += f"🔧 Executing: {tool_name}({tool_args})\n"
+                    
+                    # Execute the tool
+                    for tool in tools:
+                        if tool.name == tool_name:
+                            try:
+                                result = tool.func(**tool_args)
+                                result_dict = json.loads(result)
+                                if result_dict.get("success"):
+                                    turn_log += f"✓ {tool_name} succeeded\n"
+                                else:
+                                    turn_log += f"✗ {tool_name}: {result_dict.get('error', 'Unknown error')}\n"
+                            except Exception as e:
+                                turn_log += f"✗ Tool error: {str(e)}\n"
+                            break
+            
+            # Update UI with real-time log
+            full_log += turn_log
             with log_placeholder.container():
                 st.markdown("### 📋 ARIA Mission Log")
                 st.code(full_log, language="text")
-            # Small delay to prevent overwhelming updates
-            await asyncio.sleep(0.01)
+            
+            await asyncio.sleep(0.5)
+        
+        # Final status
+        state = env_manager.get_state()
+        final_status = f"\n✅ Mission completed after {turn_count} turns\n"
+        final_status += f"Survivors rescued: {len(state.get('survivors_at_base', []))} / {len(state.get('survivors', []))}\n"
+        full_log += final_status
         
         status_placeholder.success("✅ ARIA mission cycle complete!")
-        st.session_state.mission_log = full_log
-        return full_log
         
     except Exception as e:
+        full_log += f"\n❌ Agent error: {str(e)}\n"
         status_placeholder.error(f"❌ Agent error: {e}")
-        st.write(f"Full error: {str(e)}")
-        return full_log
+    
+    st.session_state.mission_log = full_log
+    return full_log
 
 
 # ---------------------------------------------------------------------------
@@ -281,34 +685,48 @@ if st.session_state.mission_log:
 # Grid and status display
 # ---------------------------------------------------------------------------
 
-with st.spinner("Fetching mission state..."):
-    state = fetch_state()
+# ---------------------------------------------------------------------------
+# Grid and status display
+# ---------------------------------------------------------------------------
 
-if state:
-    with col_grid:
-        if show_grid:
-            st.subheader("🗺️ Grid State")
-            grid_view = render_grid_emoji(state.get("grid", {}))
-            st.code(grid_view, language=None)
-    
-    with col_metrics:
-        st.subheader("📊 Mission Status")
-        summary = render_mission_summary(state)
-        st.markdown(summary)
-        
-        # Drone table
-        st.subheader("🚁 Drone Fleet")
-        drone_df = render_drone_table(state.get("drones", []))
-        if not drone_df.empty:
-            st.dataframe(drone_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No drone data available")
+if not st.session_state.environment_initialized:
+    col_grid.info("🔧 Please initialize the environment using the Control Panel on the left.")
 else:
-    with col_grid:
-        st.error(
-            "❌ Cannot connect to MCP server. "
-            "Ensure `uvicorn mcp_server.server:app` is running."
-        )
+    with st.spinner("Fetching mission state..."):
+        state = fetch_state()
+    
+    if state:
+        with col_grid:
+            if show_grid:
+                # Render interactive Plotly map
+                fig = render_grid_plotly(
+                    state.get("grid", {}),
+                    state.get("drones", []),
+                    state.get("survivors", [])
+                )
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Cannot render grid map.")
+        
+        with col_metrics:
+            st.subheader("📊 Mission Status")
+            summary = render_mission_summary(state)
+            st.markdown(summary)
+            
+            # Drone table
+            st.subheader("🚁 Drone Fleet")
+            drone_df = render_drone_table(state.get("drones", []))
+            if not drone_df.empty:
+                st.dataframe(drone_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No drone data available")
+    else:
+        with col_grid:
+            st.error(
+                "❌ Cannot fetch environment state. "
+                "Please ensure environment is properly initialized."
+            )
 
 # ---------------------------------------------------------------------------
 # Session/debug info

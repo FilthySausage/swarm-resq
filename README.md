@@ -12,7 +12,7 @@
 
 **Swarm-ResQ** is a comprehensive autonomous rescue system that demonstrates multi-agent coordination using:
 
-- **LLM-Driven Decision Making**: Google Gemini 1.5 Flash powers Chain-of-Thought reasoning
+- **LLM-Driven Decision Making**: Google Gemini 2.5 Flash powers Chain-of-Thought reasoning
 - **Multi-Agent Coordination**: 3-5 drones coordinate without collisions or conflicts
 - **Persistent Memory**: Multi-turn context remembers explored areas, survivor locations, hazards
 - **Real-Time Streaming UI**: Live visualization of agent reasoning and mission progress
@@ -326,7 +326,7 @@ MCP_SERVER_URL=http://localhost:8000/mcp
 
 ```python
 # LLM model
-model="gemini-1.5-flash"  # Or use "gemini-pro" for higher quality
+model="gemini-2.5-flash"  # Or use "gemini-pro" for higher quality
 temperature=0  # Deterministic decisions
 
 # Agent loop parameters

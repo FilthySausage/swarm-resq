@@ -10,3 +10,4 @@ streamlit
 python-dotenv
 requests
 pandas
+plotly
