@@ -29,6 +29,7 @@ sys.path.insert(0, str(project_root))
 from ui.environment_manager import EnvironmentManager
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 # from langchain_openai import ChatOpenAI  # Commented: Using Gemini instead
 from dotenv import load_dotenv
@@ -586,19 +587,19 @@ Be concise but strategic."""
         # Run agent loop
         status_placeholder.info("🌀 ARIA Agent Starting Mission...")
         
-        messages = []
+        messages = [SystemMessage(content=system_prompt)]
         mission_active = True
         turn_count = 0
-        
+
         while mission_active and turn_count < 15:  # Limit to 15 turns
             turn_count += 1
             turn_log = f"\n--- TURN {turn_count} ---\n"
-            
+
             # Get state
             state = env_manager.get_state()
             survivors_remaining = state.get("survivors_at_base", [])
             all_survivors = len(state.get("survivors", []))
-            
+
             # Check win condition
             rescuedcount = len(state.get("survivors_at_base", []))
             if rescuedcount == all_survivors:
@@ -606,37 +607,56 @@ Be concise but strategic."""
                 full_log += turn_log
                 mission_active = False
                 break
-            
+
             # Add user message for this turn
             user_msg = f"Turn {turn_count}: {rescuedcount}/{all_survivors} survivors rescued. Execute next action."
-            messages.append(("user", user_msg))
-            
+            messages.append(HumanMessage(content=user_msg))
+
             # Get LLM response
             response = llm_with_tools.invoke(messages)
-            
-            # Add assistant response to messages
-            messages.append(("assistant", response))
-            
+
+            # Add assistant response to messages (response is already an AIMessage)
+            messages.append(response)
+
+            # Extract text content for logging (content may be a string or list)
+            if isinstance(response.content, str):
+                turn_log += response.content + "\n"
+            elif isinstance(response.content, list):
+                for block in response.content:
+                    if isinstance(block, str):
+                        turn_log += block + "\n"
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        turn_log += block.get("text", "") + "\n"
+
             # Process tool calls if any
             if hasattr(response, 'tool_calls') and response.tool_calls:
                 for tool_call in response.tool_calls:
                     tool_name = tool_call['name']
                     tool_args = tool_call['args']
+                    tool_call_id = tool_call.get('id', tool_name)
                     turn_log += f"🔧 Executing: {tool_name}({tool_args})\n"
-                    
+
                     # Execute the tool
-                    for tool in tools:
-                        if tool.name == tool_name:
+                    result_str = ""
+                    for t in tools:
+                        if t.name == tool_name:
                             try:
-                                result = tool.func(**tool_args)
-                                result_dict = json.loads(result)
+                                result_str = t.func(**tool_args)
+                                result_dict = json.loads(result_str)
                                 if result_dict.get("success"):
                                     turn_log += f"✓ {tool_name} succeeded\n"
                                 else:
                                     turn_log += f"✗ {tool_name}: {result_dict.get('error', 'Unknown error')}\n"
                             except Exception as e:
+                                result_str = json.dumps({"error": str(e)})
                                 turn_log += f"✗ Tool error: {str(e)}\n"
                             break
+
+                    # Feed tool result back to the LLM
+                    messages.append(ToolMessage(
+                        content=result_str,
+                        tool_call_id=tool_call_id,
+                    ))
             
             # Update UI with real-time log
             full_log += turn_log
