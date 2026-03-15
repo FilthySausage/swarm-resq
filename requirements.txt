@@ -1,9 +1,12 @@
 fastapi
-uvicorn
-langchain
-langchain-core
+uvicorn[standard]
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-community
 langchain-mcp-adapters
 langchain-google-genai
 mcp
 streamlit
 python-dotenv
+requests
+pandas

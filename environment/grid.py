@@ -9,6 +9,7 @@ survivor placement, and hazard placement.
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional
+import random
 
 
 class CellType(Enum):
@@ -72,9 +73,101 @@ class Grid:
         return "\n".join(rows)
 
 
-# ---------------------------------------------------------------------------
-# TODO (Member 3): Add helper functions for:
-#   - place_survivors(grid, count)
-#   - place_hazards(grid, count)
-#   - place_obstacles(grid, count)
-# ---------------------------------------------------------------------------
+def place_survivors(grid: Grid, count: int, avoid_origin: bool = True) -> list[tuple[int, int]]:
+    """
+    Randomly place survivors on empty cells.
+    
+    Args:
+        grid: The grid to place survivors on
+        count: Number of survivors to place
+        avoid_origin: If True, never place at (0, 0)
+        
+    Returns:
+        List of (x, y) coordinates where survivors were placed
+    """
+    placed = []
+    attempts = 0
+    max_attempts = count * 10
+
+    while len(placed) < count and attempts < max_attempts:
+        x = random.randint(0, grid.width - 1)
+        y = random.randint(0, grid.height - 1)
+
+        if avoid_origin and (x, y) == (0, 0):
+            attempts += 1
+            continue
+
+        cell = grid.get_cell(x, y)
+        if cell and cell.cell_type == CellType.EMPTY:
+            grid.set_cell_type(x, y, CellType.SURVIVOR)
+            placed.append((x, y))
+
+        attempts += 1
+
+    return placed
+
+
+def place_hazards(grid: Grid, count: int) -> list[tuple[int, int]]:
+    """
+    Randomly place hazards on empty cells.
+    
+    Args:
+        grid: The grid to place hazards on
+        count: Number of hazards to place
+        
+    Returns:
+        List of (x, y) coordinates where hazards were placed
+    """
+    placed = []
+    attempts = 0
+    max_attempts = count * 10
+
+    while len(placed) < count and attempts < max_attempts:
+        x = random.randint(0, grid.width - 1)
+        y = random.randint(0, grid.height - 1)
+
+        if (x, y) == (0, 0):  # Never place at base
+            attempts += 1
+            continue
+
+        cell = grid.get_cell(x, y)
+        if cell and cell.cell_type == CellType.EMPTY:
+            grid.set_cell_type(x, y, CellType.HAZARD)
+            placed.append((x, y))
+
+        attempts += 1
+
+    return placed
+
+
+def place_obstacles(grid: Grid, count: int) -> list[tuple[int, int]]:
+    """
+    Randomly place obstacles on empty cells.
+    
+    Args:
+        grid: The grid to place obstacles on
+        count: Number of obstacles to place
+        
+    Returns:
+        List of (x, y) coordinates where obstacles were placed
+    """
+    placed = []
+    attempts = 0
+    max_attempts = count * 10
+
+    while len(placed) < count and attempts < max_attempts:
+        x = random.randint(0, grid.width - 1)
+        y = random.randint(0, grid.height - 1)
+
+        if (x, y) == (0, 0):  # Never place at base
+            attempts += 1
+            continue
+
+        cell = grid.get_cell(x, y)
+        if cell and cell.cell_type == CellType.EMPTY:
+            grid.set_cell_type(x, y, CellType.OBSTACLE)
+            placed.append((x, y))
+
+        attempts += 1
+
+    return placed

@@ -3,7 +3,8 @@ agent.py — LangChain AI Command Agent (Gemini free-tier)
 Member 1 (Agent/AI) workspace.
 
 Connects to the FastMCP server, loads drone tools via the
-langchain-mcp-adapters bridge, and drives a Gemini ReAct agent loop.
+langchain-mcp-adapters bridge, and drives a Gemini ReAct agent loop
+with multi-turn memory, mission tracking, and streaming support.
 
 Prerequisites:
     - Copy .env.example → .env and set GOOGLE_API_KEY.
@@ -15,14 +16,19 @@ Run standalone test:
 
 import asyncio
 import os
+import json
+from typing import Optional, AsyncGenerator, Callable, Any
+import httpx
 
 from dotenv import load_dotenv
-from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import tool
+
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from orchestrator.prompts import MISSION_START_PROMPT
+from orchestrator.memory import ConversationMemoryBuffer, MissionMemory
+from orchestrator.mission import MissionMonitor, MissionStatus
 
 # ---------------------------------------------------------------------------
 # Load environment variables from .env (ignored by git)
@@ -37,14 +43,115 @@ if not GOOGLE_API_KEY:
         "https://aistudio.google.com/app/apikey"
     )
 
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp")
+# Server URLs
+SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8000")
+TOOLS_BASE_URL = f"{SERVER_URL}/tools"
 
-MCP_CONFIG = {
-    "swarm-resq": {
-        "url": MCP_SERVER_URL,
-        "transport": "streamable_http",
-    }
-}
+# Direct HTTP client for tool calls
+async def call_tool(tool_name: str, **params) -> dict:
+    """Call a tool via REST endpoint."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            if tool_name == "initialize_mission":
+                url = f"{TOOLS_BASE_URL}/initialize_mission"
+                response = await client.post(url, params=params)
+            elif tool_name == "get_swarm_state":
+                url = f"{TOOLS_BASE_URL}/get_swarm_state"
+                response = await client.get(url)
+            elif tool_name == "move_drone":
+                url = f"{TOOLS_BASE_URL}/move_drone"
+                response = await client.post(url, params=params)
+            elif tool_name == "scan_area":
+                url = f"{TOOLS_BASE_URL}/scan_area"
+                response = await client.post(url, params=params)
+            elif tool_name == "rescue_survivor":
+                url = f"{TOOLS_BASE_URL}/rescue_survivor"
+                response = await client.post(url, params=params)
+            elif tool_name == "return_to_base":
+                url = f"{TOOLS_BASE_URL}/return_to_base"
+                response = await client.post(url, params=params)
+            elif tool_name == "get_survivor_counts":
+                url = f"{TOOLS_BASE_URL}/get_survivor_counts"
+                response = await client.get(url)
+            elif tool_name == "get_drone_state":
+                url = f"{TOOLS_BASE_URL}/get_drone_state"
+                response = await client.get(url, params=params)
+            elif tool_name == "reset_mission":
+                url = f"{TOOLS_BASE_URL}/reset_mission"
+                response = await client.post(url)
+            else:
+                return {"success": False, "error": f"Unknown tool: {tool_name}"}
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+
+def create_language_tools():
+    """Create LangChain tool definitions that call REST endpoints."""
+    from langchain_core.tools import tool
+    
+    @tool
+    def initialize_mission(width: int = 20, height: int = 20, drone_count: int = 3, survivor_count: int = 5) -> str:
+        """Initialize a new rescue mission"""
+        result = asyncio.run(call_tool("initialize_mission", width=width, height=height, drone_count=drone_count, survivor_count=survivor_count))
+        return json.dumps(result)
+    
+    @tool
+    def get_swarm_state() -> str:
+        """Get the full swarm state and grid"""
+        result = asyncio.run(call_tool("get_swarm_state"))
+        return json.dumps(result)
+    
+    @tool
+    def move_drone(drone_id: str, dx: int, dy: int) -> str:
+        """Move a drone by (dx, dy)"""
+        result = asyncio.run(call_tool("move_drone", drone_id=drone_id, dx=dx, dy=dy))
+        return json.dumps(result)
+    
+    @tool
+    def scan_area(drone_id: str, radius: int = 2) -> str:
+        """Scan the area around a drone"""
+        result = asyncio.run(call_tool("scan_area", drone_id=drone_id, radius=radius))
+        return json.dumps(result)
+    
+    @tool
+    def rescue_survivor(drone_id: str, target_x: int, target_y: int) -> str:
+        """Rescue a survivor at a location"""
+        result = asyncio.run(call_tool("rescue_survivor", drone_id=drone_id, target_x=target_x, target_y=target_y))
+        return json.dumps(result)
+    
+    @tool
+    def return_to_base(drone_id: str) -> str:
+        """Return a drone to base"""
+        result = asyncio.run(call_tool("return_to_base", drone_id=drone_id))
+        return json.dumps(result)
+    
+    @tool
+    def get_survivor_counts() -> str:
+        """Get counts of survivors"""
+        result = asyncio.run(call_tool("get_survivor_counts"))
+        return json.dumps(result)
+    
+    @tool
+    def get_drone_state(drone_id: str) -> str:
+        """Get state of a single drone"""
+        result = asyncio.run(call_tool("get_drone_state", drone_id=drone_id))
+        return json.dumps(result)
+    
+    return [
+        initialize_mission,
+        get_swarm_state,
+        move_drone,
+        scan_area,
+        rescue_survivor,
+        return_to_base,
+        get_survivor_counts,
+        get_drone_state,
+    ]
 
 # ---------------------------------------------------------------------------
 # System prompt — enforces Chain-of-Thought reasoning before every tool call
@@ -80,12 +187,14 @@ Only AFTER the THOUGHT block should you invoke a tool.
 OPERATIONAL RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Always call get_swarm_state() at the start of each turn to ground yourself.
-- Always call scan_area() before routing a drone into an unexplored region.
+- Scan an area before routing a drone into an unexplored region.
 - Assign drones with the HIGHEST battery to the longest routes.
 - A drone carrying cargo (cargo != null) must travel to base (0,0) FIRST.
 - If any drone's battery < 20 %, immediately issue a return-to-base order.
 - Never move two drones to the same cell in the same turn.
 - dx and dy values for move_drone must each be exactly -1, 0, or 1.
+- When a survivor is detected, use rescue_survivor() when adjacent.
+- When a drone reaches base with cargo, use return_to_base() to complete.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESPONSE FORMAT
@@ -93,116 +202,318 @@ RESPONSE FORMAT
 After all tool calls for a turn, output a concise status report:
   STATUS REPORT:
     • Explored: X%  |  Survivors found: N  |  Rescued: M
-    • Drone statuses: <id> @ (x,y) bat=Z% [status]
+    • Drone statuses: <id> @ (x,y) bat=Z% [cargo/status]
     • Next planned actions: <brief>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MISSION MEMORY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Recall these facts from previous turns:
+{mission_context}
 """
 
 # ---------------------------------------------------------------------------
-# Agent factory
+# Agent factory with memory integration
 # ---------------------------------------------------------------------------
 
-def _build_prompt() -> ChatPromptTemplate:
+class MultiTurnAgent:
     """
-    Build the ReAct-compatible prompt template.
-    The {agent_scratchpad} placeholder is required by create_react_agent.
+    Wraps LangChain agent with multi-turn memory and mission tracking.
     """
-    return ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            ("human", "{input}"),
-            ("placeholder", "{agent_scratchpad}"),
-        ]
-    )
 
+    def __init__(self):
+        self.memory = ConversationMemoryBuffer(max_message_pairs=20)
+        self.mission = MissionMonitor()
+        self.streaming = False
+
+    def _build_prompt(self) -> ChatPromptTemplate:
+        """
+        Build the ReAct-compatible prompt template with memory context.
+        """
+        # Get current mission context
+        mission_context = self.memory.mission_memory.to_context_string()
+        system_prompt = SYSTEM_PROMPT.format(mission_context=mission_context)
+
+        return ChatPromptTemplate.from_messages(
+            [
+                ("system", system_prompt),
+                ("human", "{input}"),
+                ("placeholder", "{agent_scratchpad}"),
+            ]
+        )
+
+    async def run_cycle(
+        self,
+        mission_briefing: str = "",
+        grid_width: int = 20,
+        grid_height: int = 20,
+    ) -> str:
+        """
+        Execute one full agent reasoning and action cycle using plain-text ReAct loop.
+        """
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                google_api_key=GOOGLE_API_KEY,
+                temperature=0,
+                convert_system_message_to_human=True,
+            )
+            
+            # Get mission context
+            mission_context = self.memory.mission_memory.to_context_string()
+            system_prompt = SYSTEM_PROMPT.format(mission_context=mission_context)
+            
+            # Add tool list to system prompt
+            tool_list = """
+Available Tools (call them using this format: [TOOL: tool_name(param1=value1, param2=value2)]
+- initialize_mission(width=20, height=20, drone_count=3, survivor_count=5)
+- get_swarm_state()
+- move_drone(drone_id, dx, dy)
+- scan_area(drone_id, radius=2)
+- rescue_survivor(drone_id, target_x, target_y)
+- return_to_base(drone_id)
+- get_survivor_counts()
+- get_drone_state(drone_id)
+"""
+            system_prompt += "\n" + tool_list
+            
+            # Build user input
+            user_input = MISSION_START_PROMPT.format(
+                width=grid_width, height=grid_height
+            )
+            if mission_briefing:
+                user_input += f"\n\nAdditional briefing: {mission_briefing}"
+            
+            # ReAct loop with plain text messages
+            from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+            
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_input)
+            ]
+            
+            full_output = ""
+            max_iterations = 15
+            
+            for iteration in range(max_iterations):
+                # Get response from LLM
+                response = await llm.ainvoke(messages)
+                response_text = response.content if hasattr(response, 'content') else str(response)
+                full_output += "\n" + response_text
+                
+                # Add assistant response to messages
+                messages.append(AIMessage(content=response_text))
+                
+                # Parse tool calls from response (format: [TOOL: tool_name(args)])
+                import re
+                tool_pattern = r'\[TOOL:\s*(\w+)\((.*?)\)\]'
+                matches = re.findall(tool_pattern, response_text)
+                
+                if matches:
+                    tool_results = []
+                    for tool_name, args_str in matches:
+                        # Parse arguments
+                        try:
+                            # Simple argument parsing
+                            args = {}
+                            if args_str.strip():
+                                for arg_pair in args_str.split(','):
+                                    if '=' in arg_pair:
+                                        key, val = arg_pair.split('=', 1)
+                                        key = key.strip()
+                                        val = val.strip().strip('"\'')
+                                        # Try to convert to appropriate type
+                                        if val.isdigit():
+                                            args[key] = int(val)
+                                        elif val == 'True':
+                                            args[key] = True
+                                        elif val == 'False':
+                                            args[key] = False
+                                        else:
+                                            args[key] = val
+                            
+                            # Call the tool
+                            result = await call_tool(tool_name, **args)
+                            result_text = json.dumps(result) if isinstance(result, dict) else str(result)
+                            tool_results.append(f"Tool {tool_name} returned: {result_text}")
+                        except Exception as e:
+                            tool_results.append(f"Tool {tool_name} error: {str(e)}")
+                    
+                    # Add tool results to message history
+                    if tool_results:
+                        tool_feedback = "\n".join(tool_results)
+                        full_output += f"\n\n{tool_feedback}\n\n(Please continue with next action or reasoning)"
+                        messages.append(HumanMessage(content=f"Tool Results:\n{tool_feedback}"))
+                else:
+                    # No tool calls found, agent is done
+                    break
+            
+            # Record in memory
+            self.memory.add_ai_message(full_output)
+            return full_output
+
+        except Exception as e:
+            error_msg = f"Agent error: {str(e)}"
+            import traceback
+            traceback.print_exc()
+            return error_msg
+
+    async def stream_cycle(
+        self,
+        mission_briefing: str = "",
+        grid_width: int = 20,
+        grid_height: int = 20,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Execute one cycle with streaming output (token-by-token) using plain-text ReAct.
+        """
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                google_api_key=GOOGLE_API_KEY,
+                temperature=0,
+                convert_system_message_to_human=True,
+                streaming=True,
+            )
+
+            # Get mission context
+            mission_context = self.memory.mission_memory.to_context_string()
+            system_prompt = SYSTEM_PROMPT.format(mission_context=mission_context)
+            
+            # Add tool list to system prompt
+            tool_list = """
+Available Tools (call them using this format: [TOOL: tool_name(param1=value1, param2=value2)]
+- initialize_mission(width=20, height=20, drone_count=3, survivor_count=5)
+- get_swarm_state()
+- move_drone(drone_id, dx, dy)
+- scan_area(drone_id, radius=2)
+- rescue_survivor(drone_id, target_x, target_y)
+- return_to_base(drone_id)
+- get_survivor_counts()
+- get_drone_state(drone_id)
+"""
+            system_prompt += "\n" + tool_list
+
+            # Build user input
+            user_input = MISSION_START_PROMPT.format(
+                width=grid_width, height=grid_height
+            )
+            if mission_briefing:
+                user_input += f"\n\nAdditional briefing: {mission_briefing}"
+
+            # ReAct loop with plain text messages and streaming
+            from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+            
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_input)
+            ]
+            
+            full_output = ""
+            max_iterations = 15
+            
+            for iteration in range(max_iterations):
+                # Stream response from LLM with full message context
+                stream_response = ""
+                try:
+                    async for chunk in llm.astream(messages[-1] if len(messages) > 1 else HumanMessage(content=user_input)):
+                        if hasattr(chunk, 'content') and chunk.content:
+                            content = chunk.content
+                            stream_response += content
+                            full_output += content
+                            yield content
+                except Exception as e:
+                    yield f"\n[Stream error: {str(e)}]\n"
+                    break
+                
+                if not stream_response:
+                    break
+                    
+                messages.append(AIMessage(content=stream_response))
+                
+                # Parse tool calls from response
+                import re
+                tool_pattern = r'\[TOOL:\s*(\w+)\((.*?)\)\]'
+                matches = re.findall(tool_pattern, stream_response)
+                
+                if matches:
+                    tool_results = []
+                    for tool_name, args_str in matches:
+                        try:
+                            # Simple argument parsing
+                            args = {}
+                            if args_str.strip():
+                                for arg_pair in args_str.split(','):
+                                    if '=' in arg_pair:
+                                        key, val = arg_pair.split('=', 1)
+                                        key = key.strip()
+                                        val = val.strip().strip('"\'')
+                                        if val.isdigit():
+                                            args[key] = int(val)
+                                        elif val == 'True':
+                                            args[key] = True
+                                        elif val == 'False':
+                                            args[key] = False
+                                        else:
+                                            args[key] = val
+                            
+                            # Call the tool
+                            result = await call_tool(tool_name, **args)
+                            result_text = json.dumps(result) if isinstance(result, dict) else str(result)
+                            tool_results.append(f"Tool {tool_name} returned: {result_text}")
+                        except Exception as e:
+                            tool_results.append(f"Tool {tool_name} error: {str(e)}")
+                    
+                    # Add tool results to message history
+                    if tool_results:
+                        tool_feedback = "\n".join(tool_results)
+                        yield f"\n\n{tool_feedback}\n\n"
+                        full_output += f"\n\n{tool_feedback}\n\n"
+                        messages.append(HumanMessage(content=f"Tool Results:\n{tool_feedback}"))
+                else:
+                    # No tool calls found, agent is done
+                    break
+            
+            # Record in memory
+            self.memory.add_ai_message(full_output)
+
+        except Exception as e:
+            yield f"\n[ERROR: {str(e)}]\n"
+
+
+# ---------------------------------------------------------------------------
+# Public API functions
+# ---------------------------------------------------------------------------
 
 async def run_agent(mission_briefing: str = "") -> str:
     """
-    Connect to the MCP server, discover tools, and run one full agent cycle.
+    Run one full agent cycle using REST endpoints.
 
     Args:
-        mission_briefing: Optional extra instructions appended to the
-                          mission start prompt (e.g. from the Streamlit UI).
+        mission_briefing: Optional extra instructions.
 
     Returns:
         The agent's final text response for this cycle.
     """
-    async with MultiServerMCPClient(MCP_CONFIG) as client:
-        tools = client.get_tools()
-
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            google_api_key=GOOGLE_API_KEY,
-            temperature=0,          # deterministic decisions
-            convert_system_message_to_human=True,  # Gemini requirement
-        )
-
-        agent = create_react_agent(
-            llm=llm,
-            tools=tools,
-            prompt=_build_prompt(),
-        )
-
-        executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            verbose=True,
-            max_iterations=30,
-            handle_parsing_errors=True,
-            return_intermediate_steps=False,
-        )
-
-        user_input = MISSION_START_PROMPT.format(width=20, height=20)
-        if mission_briefing:
-            user_input += f"\n\nAdditional briefing from Command: {mission_briefing}"
-
-        result = await executor.ainvoke({"input": user_input})
-        return result.get("output", "")
+    agent = MultiTurnAgent()
+    return await agent.run_cycle(mission_briefing)
 
 
-async def stream_agent(mission_briefing: str = ""):
+async def stream_agent(mission_briefing: str = "") -> AsyncGenerator[str, None]:
     """
-    Streaming variant — yields token chunks for the Streamlit UI.
-    Usage:
-        async for chunk in stream_agent():
-            print(chunk, end="", flush=True)
+    Stream one full agent cycle using REST endpoints (token-by-token).
+    
+    Suitable for real-time UI rendering. Yields text chunks as they are generated.
+
+    Args:
+        mission_briefing: Optional extra instructions.
+
+    Yields:
+        Token chunks from the agent's reasoning and actions.
     """
-    async with MultiServerMCPClient(MCP_CONFIG) as client:
-        tools = client.get_tools()
-
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            google_api_key=GOOGLE_API_KEY,
-            temperature=0,
-            convert_system_message_to_human=True,
-            streaming=True,
-        )
-
-        agent = create_react_agent(
-            llm=llm,
-            tools=tools,
-            prompt=_build_prompt(),
-        )
-
-        executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            verbose=False,
-            max_iterations=30,
-            handle_parsing_errors=True,
-        )
-
-        user_input = MISSION_START_PROMPT.format(width=20, height=20)
-        if mission_briefing:
-            user_input += f"\n\nAdditional briefing from Command: {mission_briefing}"
-
-        async for event in executor.astream_events(
-            {"input": user_input}, version="v2"
-        ):
-            kind = event.get("event")
-            if kind == "on_chat_model_stream":
-                chunk = event["data"]["chunk"]
-                if hasattr(chunk, "content") and chunk.content:
-                    yield chunk.content
+    agent = MultiTurnAgent()
+    async for chunk in agent.stream_cycle(mission_briefing):
+        yield chunk
 
 
 # ---------------------------------------------------------------------------
@@ -210,17 +521,14 @@ async def stream_agent(mission_briefing: str = ""):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     async def _main():
-        print("Connecting to MCP server at:", MCP_SERVER_URL)
+        print("Connecting to server at:", SERVER_URL)
+        print("=" * 70)
+        print("Starting ARIA Agent (non-streaming mode)...")
+        print("=" * 70)
         output = await run_agent()
-        print("\n━━━ ARIA FINAL RESPONSE ━━━")
+        print("\n" + "=" * 70)
+        print("ARIA FINAL RESPONSE")
+        print("=" * 70)
         print(output)
 
     asyncio.run(_main())
-
-
-# ---------------------------------------------------------------------------
-# TODO (Member 1):
-#   - Wire stream_agent() into ui/app.py for live token rendering
-#   - Add LangChain ConversationBufferMemory for multi-turn missions
-#   - Implement a mission-complete condition (all survivors rescued)
-# ---------------------------------------------------------------------------
