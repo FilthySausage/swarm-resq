@@ -20,7 +20,11 @@ import numpy as np
 import json
 
 import sys
-sys.path.append(r"D:\Siew Feng\swarm-resq")
+import os
+# Add parent directory to path (swarm-resq root)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.insert(0, project_root)
 from ui.environment_manager import EnvironmentManager
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
