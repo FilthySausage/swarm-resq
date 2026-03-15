@@ -18,14 +18,19 @@ import plotly.graph_objects as go
 import plotly.express as px
 import numpy as np
 import json
-
+import os
 import sys
-sys.path.append(r"D:\Siew Feng\swarm-resq")
+from pathlib import Path
+
+# Get the project root directory (universal path setup)
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from ui.environment_manager import EnvironmentManager
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
-import os
+# from langchain_google_genai import ChatGoogleGenerativeAI  # Commented: Using OpenRouter instead
+from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -529,17 +534,34 @@ async def run_stream_agent(briefing: str):
     
     try:
         # Initialize Langchain components
-        api_key = os.getenv("GOOGLE_API_KEY")
+        # --------- GEMINI (Commented out for future reuse) ---------
+        # api_key = os.getenv("GOOGLE_API_KEY")
+        # if not api_key:
+        #     status_placeholder.error("❌ GOOGLE_API_KEY not set. Add it to .env file.")
+        #     return full_log
+        # 
+        # # Create LLM with Gemini
+        # llm = ChatGoogleGenerativeAI(
+        #     model="gemini-2.5-flash",
+        #     google_api_key=api_key,
+        #     temperature=0.7,
+        # )
+        # --------- END GEMINI ---------
+        
+        # --------- OPENROUTER (Active) ---------
+        api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            status_placeholder.error("❌ GOOGLE_API_KEY not set. Add it to .env file.")
+            status_placeholder.error("❌ OPENROUTER_API_KEY not set. Add it to .env file.")
             return full_log
         
-        # Create LLM
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=api_key,
+        # Create LLM with OpenRouter (Llama 2 70B)
+        llm = ChatOpenAI(
+            model="meta-llama/llama-2-70b-chat",
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
             temperature=0.7,
         )
+        # --------- END OPENROUTER ---------
         
         # Create tools
         tools = create_langchain_tools()
