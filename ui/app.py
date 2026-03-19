@@ -39,7 +39,17 @@ load_dotenv()
 
 # MCP Server Configuration
 MCP_SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8000")
-MCP_TOOLS_URL = f"{MCP_SERVER_URL}/tools"
+ACTIVE_MCP_SERVER_URL = MCP_SERVER_URL
+
+
+def _build_mcp_base_urls() -> list[str]:
+    """Return preferred MCP server URLs with local 8000/8001 fallback."""
+    urls = [MCP_SERVER_URL]
+    if MCP_SERVER_URL.endswith(":8000"):
+        urls.append(MCP_SERVER_URL.replace(":8000", ":8001"))
+    elif MCP_SERVER_URL.endswith(":8001"):
+        urls.append(MCP_SERVER_URL.replace(":8001", ":8000"))
+    return list(dict.fromkeys(urls))
 
 # ---------------------------------------------------------------------------
 # Config
@@ -51,7 +61,7 @@ POLL_INTERVAL = 2  # seconds between auto-refresh
 CELL_COLORS = {
     ".": "⬜",  # Empty
     "#": "⬛",  # Obstacle
-    "S": "🟡",  # Survivor
+    "S": "�",  # Survivor
     "X": "🔴",  # Hazard
     "D": "🔵",  # Drone
     "R": "🟢",  # Rescued
@@ -60,20 +70,29 @@ CELL_COLORS = {
 # MCP Client Helper Functions
 async def call_mcp_tool(tool_name: str, **params) -> dict:
     """Call MCP server tool via REST endpoint."""
+    global ACTIVE_MCP_SERVER_URL
+
+    last_error = None
+    base_urls = [ACTIVE_MCP_SERVER_URL] + [u for u in _build_mcp_base_urls() if u != ACTIVE_MCP_SERVER_URL]
+
     async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            url = f"{MCP_TOOLS_URL}/{tool_name}"
-            if tool_name in ["get_swarm_state", "get_survivor_counts", "get_movement_paths"]:
-                response = await client.get(url, params=params)
-            else:
-                response = await client.post(url, params=params)
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        for base_url in base_urls:
+            try:
+                url = f"{base_url}/tools/{tool_name}"
+                if tool_name in ["get_swarm_state", "get_survivor_counts", "get_movement_paths"]:
+                    response = await client.get(url, params=params)
+                else:
+                    response = await client.post(url, params=params)
+
+                if response.status_code == 200:
+                    ACTIVE_MCP_SERVER_URL = base_url
+                    return response.json()
+
+                last_error = f"{base_url} -> HTTP {response.status_code}: {response.text}"
+            except Exception as e:
+                last_error = f"{base_url} -> {e}"
+
+    return {"success": False, "error": str(last_error or "MCP server unreachable")}
 
 def call_mcp_tool_sync(tool_name: str, **params) -> dict:
     """Synchronous wrapper for MCP tool calls."""
@@ -112,6 +131,12 @@ if "selected_model" not in st.session_state:
     st.session_state.selected_model = get_default_model()["name"]  # Default AI model
 if "identified_survivors" not in st.session_state:
     st.session_state.identified_survivors = []
+if "init_error" not in st.session_state:
+    st.session_state.init_error = ""
+if "init_status" not in st.session_state:
+    st.session_state.init_status = ""
+if "last_init_result" not in st.session_state:
+    st.session_state.last_init_result = None
 
 # ---------------------------------------------------------------------------
 # Sidebar controls
@@ -140,7 +165,20 @@ with st.sidebar:
         with st.expander("ℹ️ Model Info"):
             st.caption(f"**Provider:** {selected_model_config['provider']}")
             st.caption(f"**Model ID:** {selected_model_config['model_id']}")
+            st.caption(f"**Base URL:** {selected_model_config['base_url']}")
             st.caption(f"**Description:** {selected_model_config['description']}")
+
+        if selected_model_config.get("requires_key") and not os.getenv("OPENROUTER_API_KEY", "").strip():
+            st.warning(
+                "This model needs OPENROUTER_API_KEY. Add it to .env or switch to an Ollama (Local) model.",
+                icon="⚠️",
+            )
+
+        if str(selected_model_config.get("provider", "")).lower() == "ollama":
+            st.info(
+                "Using local Ollama backend. Ensure Ollama is running and model is pulled (e.g., `ollama run llama2`).",
+                icon="🖥️",
+            )
     
     st.divider()
     
@@ -160,10 +198,12 @@ with st.sidebar:
     
     init_btn = st.button(
         "🔧 Initialize Environment",
-        use_container_width=True,
+        width='stretch',
     )
     
     if init_btn:
+        st.session_state.init_status = "Initializing environment..."
+        st.session_state.init_error = ""
         result = call_mcp_tool_sync(
             "initialize_mission",
             width=int(grid_width),
@@ -171,6 +211,7 @@ with st.sidebar:
             drone_count=int(drone_count),
             survivor_count=int(survivor_count),
         )
+        st.session_state.last_init_result = result
         if result.get("success"):
             st.session_state.environment_initialized = True
             st.session_state.mission_active = False
@@ -178,13 +219,27 @@ with st.sidebar:
             st.session_state.drone_paths = {}
             st.session_state.mission_log = ""
             st.session_state.identified_survivors = []
+            st.session_state.init_error = ""
+            st.session_state.init_status = f"Environment initialized via {ACTIVE_MCP_SERVER_URL}"
             st.success("✅ Environment initialized!")
+            st.rerun()
         else:
-            st.error(f"❌ Initialization failed: {result.get('error')}")
-        st.rerun()
+            st.session_state.environment_initialized = False
+            st.session_state.init_error = f"❌ Initialization failed: {result.get('error')}"
+            st.session_state.init_status = "Initialization failed"
+
+    if st.session_state.init_status:
+        st.info(st.session_state.init_status)
+
+    if st.session_state.init_error:
+        st.error(st.session_state.init_error)
+
+    if st.session_state.last_init_result and not st.session_state.init_error:
+        with st.expander("Initialization Result"):
+            st.json(st.session_state.last_init_result)
     
     # Force cache refresh button (fixes attribute errors from cached old versions)
-    if st.button("🔄 Refresh Cache", use_container_width=True, help="Clear cached objects and reload"):
+    if st.button("🔄 Refresh Cache", width='stretch', help="Clear cached objects and reload"):
         st.cache_resource.clear()
         st.rerun()
     
@@ -205,13 +260,13 @@ with st.sidebar:
             "🚀 Launch ARIA",
             type="primary",
             disabled=st.session_state.mission_active or not st.session_state.environment_initialized,
-            use_container_width=True,
+            width='stretch',
         )
     with col2:
         stop_btn = st.button(
             "⏹️ Stop Mission",
             disabled=not st.session_state.mission_active,
-            use_container_width=True,
+            width='stretch',
         )
     
     st.divider()
@@ -367,7 +422,7 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
         colorscale=[
             [0.0, "#FFFFFF"],   # Empty - white
             [0.25, "#FF4444"],  # Hazard - red
-            [0.5, "#FF9900"],   # Survivor - orange
+            [0.5, "#FF00FF"],   # Survivor - magenta (high contrast)
             [0.75, "#00AA00"],  # Obstacle - green
             [1.0, "#00CC00"],   # Rescued - green
         ],
@@ -495,13 +550,13 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
                 mode="markers+text",
                 marker=dict(
                     size=14,
-                    color="orange",
+                    color="magenta",
                     symbol="star",
-                    line=dict(width=2, color="darkorange"),
+                    line=dict(width=2, color="purple"),
                 ),
                 text=survivor_ids,
                 textposition="top center",
-                textfont=dict(size=9, color="darkred"),
+                textfont=dict(size=11, color="purple"),
                 hovertext=[
                     f"<b>Survivor {survivor_ids[i]}</b><br>Pos: ({survivor_xs[i]}, {survivor_ys[i]})"
                     for i in range(len(survivor_ids))
@@ -693,23 +748,32 @@ async def run_stream_agent(briefing: str, model_name: str = None):
         live_summary_placeholder = st.empty()
         live_drone_table_placeholder = st.empty()
         live_survivor_placeholder = st.empty()
+    live_plot_key = f"live_grid_plot_{int(time.time() * 1000)}"
+    live_plot_counter = 0
     
     controller = MissionController(model_name=model_name)
 
     async def refresh_live_sections() -> None:
+        nonlocal live_plot_counter
         state = await fetch_state_async()
+        if not state:
+            state = st.session_state.get("last_state")
         if not state:
             return
 
-        with live_grid_placeholder.container():
-            fig = render_grid_plotly(
-                state.get("grid", {}),
-                state.get("drones", []),
-                state.get("survivors", []),
-                st.session_state.drone_paths if st.session_state.show_paths else {},
+        fig = render_grid_plotly(
+            state.get("grid", {}),
+            state.get("drones", []),
+            state.get("survivors", []),
+            st.session_state.drone_paths if st.session_state.show_paths else {},
+        )
+        if fig:
+            live_plot_counter += 1
+            live_grid_placeholder.plotly_chart(
+                fig,
+                width='stretch',
+                key=f"{live_plot_key}_{live_plot_counter}",
             )
-            if fig:
-                st.plotly_chart(fig, use_container_width=True, key=f"live_grid_plot_{time.time()}")
 
 
         with live_summary_placeholder.container():
@@ -720,7 +784,7 @@ async def run_stream_agent(briefing: str, model_name: str = None):
             st.subheader("🚁 Drone Fleet")
             drone_df = render_drone_table(state.get("drones", []))
             if not drone_df.empty:
-                st.dataframe(drone_df, use_container_width=True, hide_index=True)
+                st.dataframe(drone_df, width='stretch', hide_index=True)
 
         with live_survivor_placeholder.container():
             st.subheader("📍 Identified Survivor Coordinates")
@@ -729,7 +793,7 @@ async def run_stream_agent(briefing: str, model_name: str = None):
                     st.session_state.identified_survivors,
                     key=lambda c: (c["x"], c["y"]),
                 )
-                st.dataframe(pd.DataFrame(coords), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(coords), width='stretch', hide_index=True)
             else:
                 st.caption("No survivors identified yet.")
     
@@ -788,7 +852,17 @@ async def run_stream_agent(briefing: str, model_name: str = None):
         
     except Exception as e:
         full_log += f"\nERROR: {str(e)}\n"
-        status_placeholder.error(f"Mission failed: {e}")
+        error_text = str(e)
+        if "Connection refused" in error_text or "Failed to establish a new connection" in error_text:
+            status_placeholder.error(
+                "Mission failed: cannot connect to the selected model backend. If using Ollama, start it first (ollama serve)."
+            )
+        elif "OPENROUTER_API_KEY" in error_text:
+            status_placeholder.error(
+                "Mission failed: missing OPENROUTER_API_KEY for selected cloud model. Switch to Ollama Local or set the key in .env."
+            )
+        else:
+            status_placeholder.error(f"Mission failed: {e}")
         with log_placeholder.container():
             st.markdown("### MISSION LOG")
             st.code(full_log, language="text")
@@ -833,6 +907,8 @@ if st.session_state.mission_log:
 
 state = None
 
+state: Optional[dict] = None
+
 if not st.session_state.environment_initialized:
     col_grid.info("🔧 Please initialize the environment using the Control Panel on the left.")
 else:
@@ -850,7 +926,7 @@ else:
                     st.session_state.drone_paths if st.session_state.show_paths else {}
                 )
                 if fig:
-                    st.plotly_chart(fig, use_container_width=True, key="main_grid_plot")
+                    st.plotly_chart(fig, width='stretch', key="main_grid_plot")
                 else:
                     st.warning("Cannot render grid map.")
 
@@ -864,7 +940,7 @@ else:
             st.subheader("🚁 Drone Fleet")
             drone_df = render_drone_table(state.get("drones", []))
             if not drone_df.empty:
-                st.dataframe(drone_df, use_container_width=True, hide_index=True)
+                st.dataframe(drone_df, width='stretch', hide_index=True)
             else:
                 st.info("No drone data available")
 
@@ -874,7 +950,7 @@ else:
                     st.session_state.identified_survivors,
                     key=lambda c: (c["x"], c["y"]),
                 )
-                st.dataframe(pd.DataFrame(coords), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(coords), width='stretch', hide_index=True)
             else:
                 st.caption("No survivors identified yet.")
     else:

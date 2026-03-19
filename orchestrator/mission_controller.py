@@ -1,10 +1,10 @@
 """
-mission_controller.py — Single-prompt mission orchestration
+mission_controller.py — Turn-by-turn mission orchestration
 
 Behavior:
-- Ask AI once for initial assignment plan.
-- Keep executing search autonomously.
-- Ask AI again only when battery threshold is reached for reassignment.
+- Ask AI once per turn for immediate assignments only.
+- Execute a short movement slice and stream UI step updates.
+- Wait briefly, then ask AI again using latest state.
 - Mission objective is survivor coordinate discovery (no rescue required).
 """
 
@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from orchestrator.model_loader import get_default_model, get_model_by_name
+from orchestrator.model_loader import get_default_model, get_model_by_name, load_models
 from orchestrator.plan_executor import PlanExecutor
 from orchestrator.single_shot_prompts import (
     TURN_DECISION_SYSTEM_PROMPT,
@@ -40,28 +40,45 @@ class MissionController:
 
         self.model_config = model_config
         self.llm: Optional[ChatOpenAI] = None
+        self.model_candidates: list[Dict[str, Any]] = self._build_model_candidates(model_config)
         self.turn_count = 0
         self.max_turns = 60
+        self.turn_delay_seconds = 2.0
         self.max_steps_per_drone_turn = 2
 
         self.initial_plan_json: Optional[str] = None
         self.current_plan_json: Optional[str] = None
+        self.last_turn_error: Optional[str] = None
 
         self.discovered_survivors: list[dict[str, int]] = []
         self.total_survivors_target: Optional[int] = None
 
-    async def initialize_llm(self) -> None:
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        if not api_key:
-            raise EnvironmentError("OPENROUTER_API_KEY not set in .env file")
+    def _build_model_candidates(self, primary_config: Dict[str, Any]) -> list[Dict[str, Any]]:
+        # Future-proofing: could append fallback models here. Just use primary for now.
+        return [primary_config]
 
-        self.llm = ChatOpenAI(
-            model=self.model_config["model_id"],
-            api_key=api_key,
-            base_url=self.model_config["base_url"],
-            temperature=0,
-            max_tokens=self.model_config.get("max_tokens", 8000),
-        )
+    def _make_llm(self, config: Dict[str, Any]) -> ChatOpenAI:
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        # If openrouter model and no key, maybe warn, but allow passing dummy to ChatOpenAI
+        if config.get("requires_key", False) and not api_key:
+            raise EnvironmentError(f"OPENROUTER_API_KEY not set in .env file, but required by {config.get('name')}")
+        
+        args = {
+            "model": config["model_id"],
+            "api_key": api_key if api_key else "dummy_key_for_local_models",
+            "base_url": config["base_url"],
+            "temperature": 0,
+            "max_tokens": config.get("max_tokens", 350),
+        }
+        if "timeout" in config:
+            args["timeout"] = config["timeout"]
+        if "extra_body" in config:
+            args["model_kwargs"] = config["extra_body"]
+            
+        return ChatOpenAI(**args)
+
+    async def initialize_llm(self) -> None:
+        self.llm = self._make_llm(self.model_config)
 
     async def _get_json(self, url: str) -> dict:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -96,17 +113,68 @@ class MissionController:
             f"Drones:\n{chr(10).join(drone_lines)}"
         )
 
+    def build_fallback_turn_plan_json(self, state: Dict[str, Any], reason: str = "fallback") -> str:
+        """Build a deterministic, minimal per-turn plan when AI output is unavailable/invalid."""
+        directions = ["north", "east", "south", "west"]
+        assignments = []
+        low_battery_drones = []
+        active_search_drones = []
+
+        drones = state.get("drones", [])
+        for idx, drone in enumerate(drones):
+            drone_id = drone.get("drone_id", f"drone-{idx + 1}")
+            battery = int(drone.get("battery", 0))
+
+            if 0 < battery <= 20:
+                low_battery_drones.append(drone_id)
+                assignments.append(
+                    {
+                        "drone_id": drone_id,
+                        "action": "return_to_base",
+                        "direction": None,
+                        "reason": "Low battery safety return",
+                    }
+                )
+            else:
+                active_search_drones.append(drone_id)
+                direction = directions[(self.turn_count + idx) % len(directions)]
+                assignments.append(
+                    {
+                        "drone_id": drone_id,
+                        "action": "search_continuous",
+                        "direction": direction,
+                        "reason": "Fallback immediate exploration step",
+                    }
+                )
+
+        payload = {
+            "thought": f"Fallback turn plan generated ({reason})",
+            "search_strategy": "turn_step_fallback",
+            "drone_assignments": assignments,
+            "battery_management": {
+                "low_battery_drones": low_battery_drones,
+                "active_search_drones": active_search_drones,
+                "recall_threshold": 20,
+            },
+        }
+        return json.dumps(payload)
+
     async def _ask_ai(self, system_prompt: str, user_message: str) -> str:
         if self.llm is None:
             raise RuntimeError("LLM is not initialized")
 
-        response = await self.llm.ainvoke(
-            [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_message),
-            ]
-        )
-        return response.content if hasattr(response, "content") else str(response)
+        try:
+            response = await self.llm.ainvoke(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_message),
+                ]
+            )
+            self.last_turn_error = None
+            return response.content if hasattr(response, "content") else str(response)
+        except Exception as exc:
+            self.last_turn_error = f"{type(exc).__name__}: {exc}"
+            raise
 
     async def request_turn_plan(self, state: Dict[str, Any], briefing: str = "") -> Optional[str]:
         state_text = self.format_state_for_ai(state)
@@ -117,7 +185,20 @@ class MissionController:
             state_text=state_text,
         )
 
-        return await self._ask_ai(TURN_DECISION_SYSTEM_PROMPT, turn_message)
+        last_error = None
+        for model_config in self.model_candidates:
+            try:
+                self.model_config = model_config
+                self.llm = self._make_llm(model_config)
+                response = await self._ask_ai(TURN_DECISION_SYSTEM_PROMPT, turn_message)
+                if response and response.strip():
+                    return response
+            except Exception as exc:
+                last_error = f"{model_config.get('name', model_config.get('model_id'))}: {type(exc).__name__}: {exc}"
+                self.last_turn_error = last_error
+
+        self.last_turn_error = last_error
+        return None
 
     async def _execute_plan_json(self, plan_json: str) -> Dict[str, Any]:
         async with PlanExecutor(known_survivors=self.discovered_survivors) as executor:
@@ -164,6 +245,8 @@ class MissionController:
         yield "SWARM-RESQ MISSION START\n"
         yield "=" * 70 + "\n"
         yield f"Model: {self.model_config['name']}\n"
+        yield f"Model ID: {self.model_config['model_id']}\n"
+        yield f"Model base URL: {self.model_config['base_url']}\n"
         yield f"Target survivors: {self.total_survivors_target}\n"
 
         while self.turn_count < self.max_turns:
@@ -179,17 +262,28 @@ class MissionController:
 
             turn_plan_json = await self.request_turn_plan(state, briefing)
             if not turn_plan_json:
-                yield "ERROR: Failed to get AI plan for current turn\n"
-                return
+                yield "WARN: AI plan unavailable; using fallback turn plan.\n"
+                if self.last_turn_error:
+                    yield f"DEBUG AI ERROR: {self.last_turn_error}\n"
+                yield f"DEBUG STATE: drones={len(state.get('drones', []))}, survivors={len(state.get('survivors', []))}\n"
+                turn_plan_json = self.build_fallback_turn_plan_json(state, reason="empty-ai-response")
 
             yield "AI decision received for this turn. Executing movements...\n"
 
             execution = await self._execute_plan_json(turn_plan_json)
             if not execution.get("success"):
-                yield "ERROR: Plan execution failed\n"
-                for line in execution.get("execution_log", []):
-                    yield line + "\n"
-                return
+                yield "WARN: AI plan invalid/execution failed; retrying with fallback plan.\n"
+                if execution.get("error"):
+                    yield f"DEBUG EXECUTION ERROR: {execution.get('error')}\n"
+                fallback_plan_json = self.build_fallback_turn_plan_json(state, reason="invalid-ai-plan")
+                execution = await self._execute_plan_json(fallback_plan_json)
+                if not execution.get("success"):
+                    yield "ERROR: Fallback plan execution failed\n"
+                    if execution.get("error"):
+                        yield f"DEBUG FALLBACK ERROR: {execution.get('error')}\n"
+                    for line in execution.get("execution_log", []):
+                        yield line + "\n"
+                    return
 
             for line in execution.get("execution_log", []):
                 yield line + "\n"
@@ -208,7 +302,8 @@ class MissionController:
                 yield "\nMISSION COMPLETE: All survivor coordinates found.\n"
                 break
 
-            await asyncio.sleep(0.3)
+            yield f"Waiting {self.turn_delay_seconds:.1f}s before next AI turn...\n"
+            await asyncio.sleep(self.turn_delay_seconds)
 
         yield "\n" + "=" * 70 + "\n"
         yield "MISSION SUMMARY\n"

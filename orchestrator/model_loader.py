@@ -4,12 +4,40 @@ Reads from config/models.json and provides model selection utilities
 """
 
 import json
+import os
 from pathlib import Path
 from typing import List, Dict, Optional
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Path to models configuration
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 MODELS_FILE = CONFIG_DIR / "models.json"
+
+
+def _normalize_base_url(url: str) -> str:
+    """Normalize OpenAI-compatible base URL; append /v1 when missing."""
+    cleaned = (url or "").rstrip("/")
+    if cleaned.endswith("/v1"):
+        return cleaned
+    return f"{cleaned}/v1"
+
+
+def _apply_env_overrides(config: Dict) -> Dict:
+    """Apply environment overrides without changing model IDs or names."""
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "").strip()
+    if not ollama_base_url:
+        return config
+
+    models = config.get("models", [])
+    for model in models:
+        provider = str(model.get("provider", "")).strip().lower()
+        if provider == "ollama":
+            model["base_url"] = _normalize_base_url(ollama_base_url)
+
+    return config
 
 
 def load_models() -> Dict:
@@ -25,7 +53,8 @@ def load_models() -> Dict:
         
         with open(MODELS_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
-        
+
+        config = _apply_env_overrides(config)
         return config
     except Exception as e:
         print(f"Error loading models config: {e}")
@@ -33,15 +62,15 @@ def load_models() -> Dict:
         return {
             "models": [
                 {
-                    "name": "Nvidia Nemotron 3 Super 120B (Free)",
-                    "provider": "OpenRouter",
-                    "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
-                    "base_url": "https://openrouter.ai/api/v1",
-                    "requires_key": True,
+                    "name": "Ollama Llama2 (Local)",
+                    "provider": "Ollama",
+                    "model_id": "llama2",
+                    "base_url": "http://localhost:11434/v1",
+                    "requires_key": False,
                     "description": "Default fallback model"
                 }
             ],
-            "default_model": "nvidia/nemotron-3-super-120b-a12b:free"
+            "default_model": "llama2"
         }
 
 
