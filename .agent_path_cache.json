@@ -2,121 +2,56 @@
   "drone-1": {
     "path": [
       {
-        "x": 0,
+        "x": 1,
         "y": 0,
         "step": 0
       },
       {
         "x": 0,
-        "y": 1,
+        "y": 0,
         "step": 1
-      },
-      {
-        "x": 0,
-        "y": 2,
-        "step": 2
-      },
-      {
-        "x": 0,
-        "y": 3,
-        "step": 3
-      },
-      {
-        "x": 0,
-        "y": 4,
-        "step": 4
-      },
-      {
-        "x": 0,
-        "y": 5,
-        "step": 5
-      },
-      {
-        "x": 0,
-        "y": 6,
-        "step": 6
-      },
-      {
-        "x": 0,
-        "y": 7,
-        "step": 7
-      },
-      {
-        "x": 0,
-        "y": 8,
-        "step": 8
-      },
-      {
-        "x": 0,
-        "y": 9,
-        "step": 9
       }
     ],
-    "moves_count": 9,
+    "moves_count": 1,
     "stopped_reason": "detected",
-    "battery_used": 9,
-    "battery_remaining": 7
+    "battery_used": 1,
+    "battery_remaining": 25
   },
   "drone-2": {
     "path": [
       {
-        "x": 13,
-        "y": 4,
+        "x": 0,
+        "y": 0,
         "step": 0
       },
       {
-        "x": 13,
-        "y": 3,
+        "x": 1,
+        "y": 0,
         "step": 1
-      },
-      {
-        "x": 13,
-        "y": 2,
-        "step": 2
-      },
-      {
-        "x": 13,
-        "y": 1,
-        "step": 3
       }
     ],
-    "moves_count": 3,
-    "stopped_reason": "detected_hazard",
-    "battery_used": 3,
-    "battery_remaining": 82
+    "moves_count": 1,
+    "stopped_reason": "detected",
+    "battery_used": 1,
+    "battery_remaining": 40
   },
   "drone-3": {
     "path": [
       {
-        "x": 10,
+        "x": 0,
         "y": 0,
         "step": 0
       },
       {
-        "x": 9,
+        "x": 1,
         "y": 0,
         "step": 1
-      },
-      {
-        "x": 8,
-        "y": 0,
-        "step": 2
-      },
-      {
-        "x": 7,
-        "y": 0,
-        "step": 3
-      },
-      {
-        "x": 6,
-        "y": 0,
-        "step": 4
       }
     ],
-    "moves_count": 4,
-    "stopped_reason": "detected_survivor",
-    "battery_used": 4,
-    "battery_remaining": 87
+    "moves_count": 1,
+    "stopped_reason": "detected",
+    "battery_used": 1,
+    "battery_remaining": 23
   },
   "drone-4": {
     "path": [
