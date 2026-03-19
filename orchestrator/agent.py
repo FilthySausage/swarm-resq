@@ -61,6 +61,9 @@ async def call_tool(tool_name: str, **params) -> dict:
             elif tool_name == "move_drone":
                 url = f"{TOOLS_BASE_URL}/move_drone"
                 response = await client.post(url, params=params)
+            elif tool_name == "move_continuous_until_stopped":
+                url = f"{TOOLS_BASE_URL}/move_continuous_until_stopped"
+                response = await client.post(url, params=params)
             elif tool_name == "scan_area":
                 url = f"{TOOLS_BASE_URL}/scan_area"
                 response = await client.post(url, params=params)
@@ -113,6 +116,12 @@ def create_language_tools():
         return json.dumps(result)
     
     @tool
+    def move_continuous_until_stopped(drone_id: str, direction_x: int, direction_y: int) -> str:
+        """⭐ OPTIMIZED: Move a drone continuously in a direction until hitting boundary, obstacle, or low battery. Returns full path in single API call."""
+        result = asyncio.run(call_tool("move_continuous_until_stopped", drone_id=drone_id, direction_x=direction_x, direction_y=direction_y))
+        return json.dumps(result)
+    
+    @tool
     def scan_area(drone_id: str, radius: int = 2) -> str:
         """Scan the area around a drone"""
         result = asyncio.run(call_tool("scan_area", drone_id=drone_id, radius=radius))
@@ -146,6 +155,7 @@ def create_language_tools():
         initialize_mission,
         get_swarm_state,
         move_drone,
+        move_continuous_until_stopped,
         scan_area,
         rescue_survivor,
         return_to_base,
@@ -187,14 +197,34 @@ Only AFTER the THOUGHT block should you invoke a tool.
 OPERATIONAL RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Always call get_swarm_state() at the start of each turn to ground yourself.
+- For EXPLORATION: Use move_continuous_until_stopped() to sweep grid sections (returns full path in 1 call)
+  * This prevents step-by-step API overhead (1 continuous move = 10-20 individual moves)
+  * Example: move_continuous_until_stopped("Drone-1", 1, 0) explores east until obstacle/battery/detection
+- For RESCUE: Use move_drone() for precise positioning after survivor detected (1 step at a time)
 - Scan an area before routing a drone into an unexplored region.
 - Assign drones with the HIGHEST battery to the longest routes.
 - A drone carrying cargo (cargo != null) must travel to base (0,0) FIRST.
 - If any drone's battery < 20 %, immediately issue a return-to-base order.
 - Never move two drones to the same cell in the same turn.
+- direction_x and direction_y for move_continuous_until_stopped() must each be exactly -1, 0, or 1.
 - dx and dy values for move_drone must each be exactly -1, 0, or 1.
 - When a survivor is detected, use rescue_survivor() when adjacent.
 - When a drone reaches base with cargo, use return_to_base() to complete.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+API OPTIMIZATION STRATEGY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use move_continuous_until_stopped() for exploration phases:
+✓ Minimize API overhead: 1 API call per drone search = 3 drones = 3 calls/turn
+  vs 10+ API calls per turn with step-by-step movement
+✓ Returns full path array + stop reason in single response
+✓ Stop reasons tell you what the drone found:
+  - "boundary" = hit grid edge, scan next direction
+  - "obstacle" = can't continue, try different direction
+  - "detected_survivor" = found a survivor, move adjacent and rescue
+  - "detected_hazard" = found hazard, avoid this direction
+  - "battery" = running low, return to base
+✓ Use returned path coordinates to understand coverage
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESPONSE FORMAT
@@ -268,7 +298,8 @@ class MultiTurnAgent:
 Available Tools (call them using this format: [TOOL: tool_name(param1=value1, param2=value2)]
 - initialize_mission(width=20, height=20, drone_count=3, survivor_count=5)
 - get_swarm_state()
-- move_drone(drone_id, dx, dy)
+- move_drone(drone_id, dx, dy) - Move one step
+- move_continuous_until_stopped(drone_id, direction_x, direction_y) ⭐ OPTIMIZED - Explore continuously, get full path in 1 call
 - scan_area(drone_id, radius=2)
 - rescue_survivor(drone_id, target_x, target_y)
 - return_to_base(drone_id)
@@ -385,7 +416,8 @@ Available Tools (call them using this format: [TOOL: tool_name(param1=value1, pa
 Available Tools (call them using this format: [TOOL: tool_name(param1=value1, param2=value2)]
 - initialize_mission(width=20, height=20, drone_count=3, survivor_count=5)
 - get_swarm_state()
-- move_drone(drone_id, dx, dy)
+- move_drone(drone_id, dx, dy) - Move one step
+- move_continuous_until_stopped(drone_id, direction_x, direction_y) ⭐ OPTIMIZED - Explore continuously, get full path in 1 call
 - scan_area(drone_id, radius=2)
 - rescue_survivor(drone_id, target_x, target_y)
 - return_to_base(drone_id)
