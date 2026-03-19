@@ -109,6 +109,12 @@ class SimulationEngine:
         """
         async with self._lock:
             logger.info(f"Initializing mission: {width}x{height} grid, {drone_count} drones")
+
+            try:
+                from orchestrator.path_tracker import clear_paths
+                clear_paths()
+            except Exception:
+                pass
             
             # Create fresh grid
             self.grid = Grid(width=width, height=height)
@@ -156,6 +162,11 @@ class SimulationEngine:
         """Reset mission to initial state."""
         async with self._lock:
             logger.info("Resetting mission")
+            try:
+                from orchestrator.path_tracker import clear_paths
+                clear_paths()
+            except Exception:
+                pass
             self.grid = None
             self.swarm = None
             self.state = SimulationState.NOT_STARTED
