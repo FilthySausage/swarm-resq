@@ -79,7 +79,7 @@ class EnvironmentManager:
 
         # Place drones at base
         for i in range(drone_count):
-            drone_id = f"Drone-{i+1}"
+            drone_id = f"drone-{i+1}"
             self.swarm.add_drone(drone_id, 0, 0)
 
         # Place survivors randomly
