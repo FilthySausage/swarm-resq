@@ -60,7 +60,7 @@ class MissionController:
             api_key=api_key,
             base_url=self.model_config["base_url"],
             temperature=0,
-            max_tokens=350,
+            max_tokens=self.model_config.get("max_tokens", 8000),
         )
 
     async def _get_json(self, url: str) -> dict:

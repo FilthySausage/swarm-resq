@@ -67,6 +67,13 @@ class EnvironmentManager:
         self.survivors_at_base = []
         self.turn_count = 0
 
+        # Clear tracked paths from old missions
+        try:
+            from orchestrator.path_tracker import clear_paths
+            clear_paths()
+        except ImportError:
+            pass  # path_tracker not available
+
         # Place obstacles (30% of grid)
         obstacle_count = int((width * height) * 0.15)
         for _ in range(obstacle_count):

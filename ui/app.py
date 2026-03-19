@@ -173,6 +173,10 @@ with st.sidebar:
         )
         if result.get("success"):
             st.session_state.environment_initialized = True
+            st.session_state.mission_active = False
+            st.session_state.mission_complete = False
+            st.session_state.drone_paths = {}
+            st.session_state.mission_log = ""
             st.session_state.identified_survivors = []
             st.success("✅ Environment initialized!")
         else:
@@ -312,14 +316,18 @@ def render_grid_emoji(grid_data: dict) -> str:
 
 def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_paths: dict = None) -> go.Figure:
     """Render interactive grid visualization with drones, survivors, and movement paths using Plotly."""
+    print("Calling render_grid_plotly", flush=True)
     if drone_paths is None:
         drone_paths = {}
     if not grid_data or "cells" not in grid_data:
+        print("Returning None because no grid data or cells", flush=True)
         return None
     
     cells = grid_data.get("cells", [])
     height = len(cells)
     width = len(cells[0]) if cells else 0
+    print(f"Grid size: {width}x{height}", flush=True)
+
     
     # Create grid visualization matrix (z values for heatmap)
     grid_visual = [[0 for _ in range(width)] for _ in range(height)]
@@ -334,12 +342,21 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
         "R": 4,   # Rescued - green
     }
     
+    # Map cell types to readable names for hover text
+    cell_name_map = {
+        ".": "Empty",
+        "#": "Obstacle",
+        "S": "Survivor",
+        "X": "Hazard",
+        "R": "Rescued",
+    }
+    
     # Fill the grid
     for y, row in enumerate(cells):
         for x, cell in enumerate(row):
             cell_type = cell.get("type", ".")
             grid_visual[y][x] = cell_color_map.get(cell_type, 0)
-            grid_labels[y][x] = cell_type
+            grid_labels[y][x] = f"({x}, {y})<br>{cell_name_map.get(cell_type, 'Unknown')}"
     
     # Create figure with custom colorscale
     fig = go.Figure()
@@ -351,7 +368,7 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
             [0.0, "#FFFFFF"],   # Empty - white
             [0.25, "#FF4444"],  # Hazard - red
             [0.5, "#FF9900"],   # Survivor - orange
-            [0.75, "#444444"],  # Obstacle - dark gray
+            [0.75, "#00AA00"],  # Obstacle - green
             [1.0, "#00CC00"],   # Rescued - green
         ],
         colorbar=dict(
@@ -364,6 +381,8 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
         hovertext=grid_labels,
         hoverinfo="text",
         name="Grid",
+        xgap=1,
+        ygap=1,
     ))
     
     # Add drone markers
@@ -499,17 +518,15 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
         ),
         xaxis=dict(
             title="X Position",
-            showgrid=True,
-            gridwidth=1,
-            gridcolor="lightgray",
+            showgrid=False,
+            zeroline=False,
         ),
         yaxis=dict(
             title="Y Position",
-            showgrid=True,
-            gridwidth=1,
-            gridcolor="lightgray",
-            # FIXED: Removed autorange="reversed" - now (0,0) is bottom-left
+            showgrid=False,
+            zeroline=False,
         ),
+        plot_bgcolor="#E5E5E5", # Use a gray background so white cells stand out and create lines
         width=800,
         height=700,
         hovermode="closest",
@@ -692,7 +709,8 @@ async def run_stream_agent(briefing: str, model_name: str = None):
                 st.session_state.drone_paths if st.session_state.show_paths else {},
             )
             if fig:
-                st.plotly_chart(fig, use_container_width=True, key="live_grid_plot")
+                st.plotly_chart(fig, use_container_width=True, key=f"live_grid_plot_{time.time()}")
+
 
         with live_summary_placeholder.container():
             st.subheader("📊 Mission Status")
@@ -719,6 +737,8 @@ async def run_stream_agent(briefing: str, model_name: str = None):
         status_placeholder.info("Initializing AI and starting mission...")
         
         full_log = ""
+        # Clear out any previous paths directly here before we start rendering
+        st.session_state.drone_paths = {}
         await refresh_live_sections()
         
         # Stream mission execution
@@ -799,6 +819,7 @@ if st.session_state.mission_active and not st.session_state.mission_complete:
     st.session_state.mission_log = agent_output
     st.session_state.mission_active = False
     st.session_state.mission_complete = True
+    st.rerun()  # Force a clean redraw to show final state and avoid duplicate UI elements
 
 # Display mission log if available
 if st.session_state.mission_log:
@@ -810,9 +831,7 @@ if st.session_state.mission_log:
 # Grid and status display
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Grid and status display
-# ---------------------------------------------------------------------------
+state = None
 
 if not st.session_state.environment_initialized:
     col_grid.info("🔧 Please initialize the environment using the Control Panel on the left.")
@@ -834,6 +853,7 @@ else:
                     st.plotly_chart(fig, use_container_width=True, key="main_grid_plot")
                 else:
                     st.warning("Cannot render grid map.")
+
         
         with col_metrics:
             st.subheader("📊 Mission Status")
