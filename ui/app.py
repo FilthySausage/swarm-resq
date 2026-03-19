@@ -184,10 +184,13 @@ with st.sidebar:
         st.write(f"{sym} = {label}")
 
 # ---------------------------------------------------------------------------
-# Layout
+# Layout (define containers upfront)
 # ---------------------------------------------------------------------------
 col_grid, col_metrics = st.columns([2, 1])
 col_log = st.container()
+status_container = st.empty()
+log_container = st.empty()
+map_container = col_grid.empty()
 
 # ---------------------------------------------------------------------------
 # Rendering helpers
@@ -310,44 +313,48 @@ async def run_aria_agent(briefing: str):
     """Stream ARIA agent output into the UI. Agent calls MCP server tools."""
     from orchestrator.agent import stream_agent
 
-    status_ph = st.empty()
-    log_ph = st.empty()
-    map_ph = col_grid.empty()
-    map_counter = 0
-
-    status_ph.info("ARIA Agent starting mission...")
+    status_container.info("ARIA Agent starting mission...")
     full_log = f"ARIA Initialized\nBriefing: {briefing or 'Standard rescue protocol'}\n\n"
+    
+    chunk_count = 0
+    map_counter = 0
 
     try:
         async for chunk in stream_agent(mission_briefing=briefing):
             full_log += chunk
-            with log_ph.container():
-                st.code(full_log[-4000:], language="text")
+            chunk_count += 1
+            
+            # Update log
+            log_container.code(full_log[-6000:], language="text")
 
-            # Refresh map every ~500 chars of output
-            if len(full_log) % 500 < max(len(chunk), 1):
+            # Update map every 10 chunks
+            if chunk_count % 10 == 0:
                 state = fetch_state()
                 if state:
                     fig = render_grid_plotly(state.get("grid", {}), state.get("drones", []))
                     if fig:
                         map_counter += 1
-                        map_ph.plotly_chart(fig, use_container_width=True, key=f"map_live_{map_counter}")
+                        map_container.plotly_chart(fig, use_container_width=True, key=f"map_{map_counter}")
 
-        # Final state refresh
+        # Final update
         state = fetch_state()
         if state:
             rescued = len(state.get("survivors_rescued", []))
             full_log += f"\n\n[MISSION COMPLETE] Survivors rescued: {rescued}"
+            log_container.code(full_log[-6000:], language="text")
+            
             fig = render_grid_plotly(state.get("grid", {}), state.get("drones", []))
             if fig:
-                map_ph.plotly_chart(fig, use_container_width=True, key="map_final")
+                map_container.plotly_chart(fig, use_container_width=True, key="map_final")
 
-        status_ph.success("[SUCCESS] ARIA mission cycle complete!")
+        status_container.success("[SUCCESS] Mission complete!")
 
     except Exception as e:
-        full_log += f"\n[ERROR] Agent error: {e}"
-        status_ph.error(f"[ERROR] {e}")
+        full_log += f"\n[ERROR] {e}"
+        status_container.error(f"[ERROR] {e}")
+        log_container.code(full_log[-6000:], language="text")
 
+    # Save and stop
     st.session_state.mission_log = full_log
     st.session_state.mission_active = False
     st.session_state.mission_complete = True
@@ -370,39 +377,62 @@ if stop_btn:
 # ---------------------------------------------------------------------------
 if st.session_state.mission_active:
     asyncio.run(run_aria_agent(mission_briefing))
+    st.rerun()  # Rerun to show final state
 
 # ---------------------------------------------------------------------------
-# Mission complete banner
+# Display based on state
 # ---------------------------------------------------------------------------
-if st.session_state.mission_complete and st.session_state.mission_log:
+if not st.session_state.environment_initialized:
+    col_grid.info("Initialize the environment using the Control Panel on the left.")
+
+elif st.session_state.mission_complete:
+    # Show final results
     state = fetch_state()
     if state:
         rescued = len(state.get("survivors_rescued", []))
         if rescued > 0:
             st.balloons()
             st.success(f"Mission Complete! {rescued} survivor(s) rescued.")
+        else:
+            st.warning(f"Mission Complete! {rescued} survivor(s) rescued.")
+        
+        with col_log:
+            st.markdown("### ARIA Mission Log")
+            st.code(st.session_state.mission_log[-6000:], language="text")
+        
+        with col_grid:
+            fig = render_grid_plotly(state.get("grid", {}), state.get("drones", []))
+            if fig:
+                st.plotly_chart(fig, use_container_width=True, key="map_complete")
+        
+        with col_metrics:
+            st.subheader("Final Mission Status")
+            st.markdown(render_mission_summary(state))
 
-# ---------------------------------------------------------------------------
-# Mission log display (persisted after agent finishes)
-# ---------------------------------------------------------------------------
-if st.session_state.mission_log and not st.session_state.mission_active:
-    with col_log:
-        st.markdown("### ARIA Mission Log")
-        st.code(st.session_state.mission_log[-6000:], language="text")
+            st.subheader("Final Drone Fleet")
+            df = render_drone_table(state.get("drones", []))
+            if not df.empty:
+                for _, row in df.iterrows():
+                    bat_val = int(row["Battery"].replace("%", ""))
+                    color = "HIGH" if bat_val > 60 else "MEDIUM" if bat_val > 20 else "LOW"
+                    st.write(f"[{color}] **{row['Drone']}** — {row['Position']} — {row['Battery']} — {row['Status']}")
+                    st.progress(bat_val / 100)
 
-# ---------------------------------------------------------------------------
-# Grid + metrics display
-# ---------------------------------------------------------------------------
-if not st.session_state.environment_initialized:
-    col_grid.info("Initialize the environment using the Control Panel on the left.")
+            counts = mcp_get("get_survivor_counts")
+            if counts and not counts.get("error"):
+                st.subheader("Final Survivor Counts")
+                st.metric("Total Rescued", counts.get("rescued", "?"))
+                st.metric("Remaining", counts.get("on_grid", "?"))
+                st.metric("In Transit", counts.get("in_cargo", "?"))
+
 else:
+    # Show pre-mission state
     state = fetch_state()
     if state:
         with col_grid:
-            if not st.session_state.mission_active:  # don't double-render during agent run
-                fig = render_grid_plotly(state.get("grid", {}), state.get("drones", []))
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True, key="map_static")
+            fig = render_grid_plotly(state.get("grid", {}), state.get("drones", []))
+            if fig:
+                st.plotly_chart(fig, use_container_width=True, key="map_static")
 
         with col_metrics:
             st.subheader("Mission Status")
@@ -411,24 +441,20 @@ else:
             st.subheader("Drone Fleet")
             df = render_drone_table(state.get("drones", []))
             if not df.empty:
-                # Battery progress bars
                 for _, row in df.iterrows():
                     bat_val = int(row["Battery"].replace("%", ""))
                     color = "HIGH" if bat_val > 60 else "MEDIUM" if bat_val > 20 else "LOW"
                     st.write(f"[{color}] **{row['Drone']}** — {row['Position']} — {row['Battery']} — {row['Status']}")
                     st.progress(bat_val / 100)
-            else:
-                st.info("No drone data available")
 
-            # Survivor counts
             counts = mcp_get("get_survivor_counts")
             if counts and not counts.get("error"):
                 st.subheader("Survivors")
                 st.metric("On Grid", counts.get("on_grid", "?"))
                 st.metric("Rescued", counts.get("rescued", "?"))
-                st.metric("In Cargo", counts.get("in_cargo", "?"))
+                st.metric("In Transit", counts.get("in_cargo", "?"))
     else:
-        col_grid.error("Cannot reach MCP server. Is it running on port 8000?")
+        col_grid.error("Cannot reach MCP server. Is it running on port 8001?")
 
 # ---------------------------------------------------------------------------
 # Debug
