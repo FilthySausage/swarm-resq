@@ -16,6 +16,7 @@ Run with:
 
 import asyncio
 import logging
+import random
 from typing import Optional, Dict, Any
 from enum import Enum
 
@@ -116,24 +117,19 @@ class SimulationEngine:
             self.move_count = 0
             self.mission_id = f"mission_{int(__import__('time').time())}"
             
-            # Deploy drones at strategic positions
+            # Deploy drones at randomized empty coordinates
             drone_ids = []
-            if drone_count >= 1:
-                self.swarm.add_drone("drone-1", x=0, y=0)
-                drone_ids.append("drone-1")
-            if drone_count >= 2:
-                self.swarm.add_drone("drone-2", x=width-1, y=0)
-                drone_ids.append("drone-2")
-            if drone_count >= 3:
-                self.swarm.add_drone("drone-3", x=0, y=height-1)
-                drone_ids.append("drone-3")
-            # Add more drones if requested
-            for i in range(drone_count - 3):
-                drone_id = f"drone-{i+4}"
-                x = (i * (width // drone_count)) % width
-                y = (i * (height // drone_count)) % height
-                self.swarm.add_drone(drone_id, x=x, y=y)
-                drone_ids.append(drone_id)
+            occupied = set()
+            for i in range(drone_count):
+                drone_id = f"drone-{i + 1}"
+                while True:
+                    x = random.randint(0, width - 1)
+                    y = random.randint(0, height - 1)
+                    if (x, y) not in occupied:
+                        occupied.add((x, y))
+                        self.swarm.add_drone(drone_id, x=x, y=y)
+                        drone_ids.append(drone_id)
+                        break
             
             # Place environment elements
             place_obstacles(self.grid, count=obstacle_count)
@@ -243,7 +239,7 @@ class SimulationEngine:
     
     async def scan_area(
         self,
-        drone_id: str,
+        drone_id: Optional[str] = None,
         radius: int = 2,
     ) -> Dict[str, Any]:
         """
@@ -262,7 +258,7 @@ class SimulationEngine:
         async with self._lock:
             await self._ensure_initialized()
             
-            if drone_id not in self.swarm.drones:
+            if drone_id is not None and drone_id not in self.swarm.drones:
                 raise ValueError(f"Drone '{drone_id}' not found")
             
             if radius < 1 or radius > 5:
@@ -554,7 +550,7 @@ async def move_drone(drone_id: str, dx: int, dy: int) -> dict:
 
 # Tool: Scan Area
 @mcp.tool()
-async def scan_area(drone_id: str, radius: int = 2) -> dict:
+async def scan_area(drone_id: Optional[str] = None, radius: int = 2) -> dict:
     """
     Scan the area around a drone for survivors, hazards, obstacles.
     
@@ -984,7 +980,7 @@ async def rest_move_drone(drone_id: str, dx: int, dy: int):
 
 
 @app.post("/tools/scan_area")
-async def rest_scan_area(drone_id: str, radius: int = 2):
+async def rest_scan_area(drone_id: Optional[str] = None, radius: int = 2):
     """Scan an area via REST."""
     return await scan_area(drone_id, radius)
 

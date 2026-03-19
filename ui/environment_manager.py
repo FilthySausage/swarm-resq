@@ -54,7 +54,11 @@ class EnvironmentManager:
         drone_count: int = 3,
         survivor_count: int = 5,
     ) -> Dict[str, Any]:
-        """Initialize a new mission with grid, drones, and survivors."""
+        """Initialize a new mission with grid, drones, and survivors.
+        
+        Uses bottom-left origin: (0,0) is bottom-left corner.
+        Drones start at base (0,0) which is bottom-left.
+        """
         self.width = width
         self.height = height
         self.grid = Grid(width, height)
@@ -67,7 +71,7 @@ class EnvironmentManager:
         obstacle_count = int((width * height) * 0.15)
         for _ in range(obstacle_count):
             x, y = random.randint(1, width - 1), random.randint(1, height - 1)
-            if (x, y) != (0, 0):  # Don't place obstacle at base
+            if (x, y) != (0, 0):  # Don't place obstacle at base (bottom-left)
                 self.grid.set_cell_type(x, y, CellType.OBSTACLE)
 
         # Place hazards (10% of grid)
@@ -77,7 +81,7 @@ class EnvironmentManager:
             if (x, y) != (0, 0) and self.grid.get_cell(x, y).cell_type == CellType.EMPTY:
                 self.grid.set_cell_type(x, y, CellType.HAZARD)
 
-        # Place drones at base
+        # Place drones at base (0,0) - bottom-left corner
         for i in range(drone_count):
             drone_id = f"Drone-{i+1}"
             self.swarm.add_drone(drone_id, 0, 0)

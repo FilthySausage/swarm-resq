@@ -9,5 +9,7 @@ mcp
 streamlit
 python-dotenv
 requests
+httpx
 pandas
 plotly
+pydantic

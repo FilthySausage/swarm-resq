@@ -1,0 +1,43 @@
+Traceback (most recent call last):
+  File "c:\herman\Hackathon(s)\Varsity Hack 2026\swarm-resq\orchestrator\plan_executor.py", line 111, in parse_plan
+    self.log(f"\u2713 Plan parsed successfully: {plan.search_strategy} strategy")
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\herman\Hackathon(s)\Varsity Hack 2026\swarm-resq\orchestrator\plan_executor.py", line 127, in log
+    print(message)
+    ~~~~~^^^^^^^^^
+  File "C:\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 0: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "c:\herman\Hackathon(s)\Varsity Hack 2026\swarm-resq\test_step3_simple.py", line 71, in <module>
+    plan = executor.parse_plan(json_response)
+  File "c:\herman\Hackathon(s)\Varsity Hack 2026\swarm-resq\orchestrator\plan_executor.py", line 121, in parse_plan
+    self.log(f"\u2717 Plan validation error: {e}")
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\herman\Hackathon(s)\Varsity Hack 2026\swarm-resq\orchestrator\plan_executor.py", line 127, in log
+    print(message)
+    ~~~~~^^^^^^^^^
+  File "C:\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2717' in position 0: character maps to <undefined>
+======================================================================
+SIMPLE STEP 3 COMPONENT TEST
+======================================================================
+
+[TEST 1] Importing PlanExecutor...
+SUCCESS: PlanExecutor imported
+
+[TEST 2] Direction conversion...
+SUCCESS: All directions correct
+  NORTH: (0, 1)
+  SOUTH: (0, -1)
+  EAST: (1, 0)
+  WEST: (-1, 0)
+
+[TEST 3] JSON plan parsing...
+FAILED: 'charmap' codec can't encode character '\u2717' in position 0: character maps to <undefined>

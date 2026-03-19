@@ -49,3 +49,4 @@ logs/
 # Streamlit
 .streamlit/secrets.toml
 /.amazonq
+*.md

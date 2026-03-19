@@ -29,6 +29,7 @@ from langchain_openai import ChatOpenAI
 from orchestrator.prompts import MISSION_START_PROMPT
 from orchestrator.memory import ConversationMemoryBuffer, MissionMemory
 from orchestrator.mission import MissionMonitor, MissionStatus
+from orchestrator.model_loader import get_model_by_name, get_default_model
 
 # ---------------------------------------------------------------------------
 # Load environment variables from .env (ignored by git)
@@ -278,15 +279,30 @@ class MultiTurnAgent:
         mission_briefing: str = "",
         grid_width: int = 20,
         grid_height: int = 20,
+        model_name: str = None,
     ) -> str:
         """
         Execute one full agent reasoning and action cycle using plain-text ReAct loop.
+        
+        Args:
+            mission_briefing: Optional mission instructions
+            grid_width: Grid width
+            grid_height: Grid height
+            model_name: Display name of model to use (e.g., "Nvidia Nemotron 3 Super 120B (Free)")
         """
         try:
+            # Get model configuration
+            if model_name:
+                model_config = get_model_by_name(model_name)
+                if not model_config:
+                    model_config = get_default_model()
+            else:
+                model_config = get_default_model()
+            
             llm = ChatOpenAI(
-                model=OPENROUTER_MODEL,
+                model=model_config["model_id"],
                 api_key=OPENROUTER_API_KEY,
-                base_url="https://openrouter.ai/api/v1",
+                base_url=model_config["base_url"],
                 temperature=0,
             )
             
@@ -395,15 +411,30 @@ Available Tools (call them using this format: [TOOL: tool_name(param1=value1, pa
         mission_briefing: str = "",
         grid_width: int = 20,
         grid_height: int = 20,
+        model_name: str = None,
     ) -> AsyncGenerator[str, None]:
         """
         Execute one cycle with streaming output (token-by-token) using plain-text ReAct.
+        
+        Args:
+            mission_briefing: Optional mission instructions
+            grid_width: Grid width
+            grid_height: Grid height
+            model_name: Display name of model to use
         """
         try:
+            # Get model configuration
+            if model_name:
+                model_config = get_model_by_name(model_name)
+                if not model_config:
+                    model_config = get_default_model()
+            else:
+                model_config = get_default_model()
+            
             llm = ChatOpenAI(
-                model=OPENROUTER_MODEL,
+                model=model_config["model_id"],
                 api_key=OPENROUTER_API_KEY,
-                base_url="https://openrouter.ai/api/v1",
+                base_url=model_config["base_url"],
                 temperature=0,
                 streaming=True,
             )
@@ -518,21 +549,22 @@ Available Tools (call them using this format: [TOOL: tool_name(param1=value1, pa
 # Public API functions
 # ---------------------------------------------------------------------------
 
-async def run_agent(mission_briefing: str = "") -> str:
+async def run_agent(mission_briefing: str = "", model_name: str = None) -> str:
     """
     Run one full agent cycle using REST endpoints.
 
     Args:
         mission_briefing: Optional extra instructions.
+        model_name: Display name of model to use (e.g., "Nvidia Nemotron 3 Super 120B (Free)")
 
     Returns:
         The agent's final text response for this cycle.
     """
     agent = MultiTurnAgent()
-    return await agent.run_cycle(mission_briefing)
+    return await agent.run_cycle(mission_briefing, model_name=model_name)
 
 
-async def stream_agent(mission_briefing: str = "") -> AsyncGenerator[str, None]:
+async def stream_agent(mission_briefing: str = "", model_name: str = None) -> AsyncGenerator[str, None]:
     """
     Stream one full agent cycle using REST endpoints (token-by-token).
     
@@ -540,12 +572,13 @@ async def stream_agent(mission_briefing: str = "") -> AsyncGenerator[str, None]:
 
     Args:
         mission_briefing: Optional extra instructions.
+        model_name: Display name of model to use
 
     Yields:
         Token chunks from the agent's reasoning and actions.
     """
     agent = MultiTurnAgent()
-    async for chunk in agent.stream_cycle(mission_briefing):
+    async for chunk in agent.stream_cycle(mission_briefing, model_name=model_name):
         yield chunk
 
 

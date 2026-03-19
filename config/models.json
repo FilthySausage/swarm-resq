@@ -1,0 +1,68 @@
+{
+  "models": [
+    {
+      "name": "Nvidia Nemotron 3 Super 120B (Free)",
+      "provider": "OpenRouter",
+      "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "High-performance reasoning model, free tier available"
+    },
+    {
+      "name": "Meta Llama 3.1 8B (Free)",
+      "provider": "OpenRouter",
+      "model_id": "meta-llama/llama-3.1-8b-instruct:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "Fast and efficient, good for quick responses"
+    },
+    {
+      "name": "Google Gemma 2 9B (Free)",
+      "provider": "OpenRouter",
+      "model_id": "google/gemma-2-9b-it:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "Google's open model, balanced performance"
+    },
+    {
+      "name": "Mistral 7B (Free)",
+      "provider": "OpenRouter",
+      "model_id": "mistralai/mistral-7b-instruct:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "Efficient instruction-following model"
+    },
+    {
+      "name": "Qwen 2.5 7B (Free)",
+      "provider": "OpenRouter",
+      "model_id": "qwen/qwen-2.5-7b-instruct:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "Alibaba's multilingual model"
+    },
+    {
+      "name": "Phi-3 Medium (Free)",
+      "provider": "OpenRouter",
+      "model_id": "microsoft/phi-3-medium-128k-instruct:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "Microsoft's compact model with long context"
+    }
+    ,
+    {
+      "name": "StepFun: Step 3.5 Flash (Free)",
+      "provider": "OpenRouter",
+      "model_id": "stepfun/step-3.5-flash:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "haha"
+    }
+  ],
+  "default_model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "notes": [
+    "All models listed are free tier on OpenRouter",
+    "Requires OPENROUTER_API_KEY in .env file",
+    "You can add more models manually by following the same format",
+    "Get your API key from: https://openrouter.ai/keys"
+  ]
+}

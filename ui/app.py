@@ -20,13 +20,14 @@ import numpy as np
 import json
 import os
 import sys
+import httpx
 from pathlib import Path
 
 # Get the project root directory (universal path setup)
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from ui.environment_manager import EnvironmentManager
+from orchestrator.model_loader import get_model_list, get_model_by_name, get_default_model
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -36,10 +37,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Initialize environment manager as Streamlit singleton
-@st.cache_resource
-def get_environment_manager():
-    return EnvironmentManager(width=20, height=20)
+# MCP Server Configuration
+MCP_SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8000")
+MCP_TOOLS_URL = f"{MCP_SERVER_URL}/tools"
 
 # ---------------------------------------------------------------------------
 # Config
@@ -57,8 +57,27 @@ CELL_COLORS = {
     "R": "🟢",  # Rescued
 }
 
-# Initialize environment manager
-env_manager = get_environment_manager()
+# MCP Client Helper Functions
+async def call_mcp_tool(tool_name: str, **params) -> dict:
+    """Call MCP server tool via REST endpoint."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            url = f"{MCP_TOOLS_URL}/{tool_name}"
+            if tool_name in ["get_swarm_state", "get_survivor_counts", "get_movement_paths"]:
+                response = await client.get(url, params=params)
+            else:
+                response = await client.post(url, params=params)
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+def call_mcp_tool_sync(tool_name: str, **params) -> dict:
+    """Synchronous wrapper for MCP tool calls."""
+    return asyncio.run(call_mcp_tool(tool_name, **params))
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -89,12 +108,41 @@ if "drone_paths" not in st.session_state:
     st.session_state.drone_paths = {}  # Track movement paths for visualization
 if "show_paths" not in st.session_state:
     st.session_state.show_paths = True  # Display movement paths
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = get_default_model()["name"]  # Default AI model
+if "identified_survivors" not in st.session_state:
+    st.session_state.identified_survivors = []
 
 # ---------------------------------------------------------------------------
 # Sidebar controls
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Control Panel")
+    
+    # AI Model Selection
+    st.subheader("🤖 AI Model Selection")
+    available_models = get_model_list()
+    selected_model_name = st.selectbox(
+        "Choose AI Model",
+        options=available_models,
+        index=available_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_models else 0,
+        help="Select which AI model to use for mission planning"
+    )
+    
+    # Update session state if model changed
+    if selected_model_name != st.session_state.selected_model:
+        st.session_state.selected_model = selected_model_name
+        st.success(f"✓ Model changed to: {selected_model_name}")
+    
+    # Display model info
+    selected_model_config = get_model_by_name(selected_model_name)
+    if selected_model_config:
+        with st.expander("ℹ️ Model Info"):
+            st.caption(f"**Provider:** {selected_model_config['provider']}")
+            st.caption(f"**Model ID:** {selected_model_config['model_id']}")
+            st.caption(f"**Description:** {selected_model_config['description']}")
+    
+    st.divider()
     
     # Environment initialization
     st.subheader("🌍 Environment Setup")
@@ -116,14 +164,19 @@ with st.sidebar:
     )
     
     if init_btn:
-        result = env_manager.initialize_mission(
+        result = call_mcp_tool_sync(
+            "initialize_mission",
             width=int(grid_width),
             height=int(grid_height),
             drone_count=int(drone_count),
             survivor_count=int(survivor_count),
         )
-        st.session_state.environment_initialized = True
-        st.success("✅ Environment initialized!")
+        if result.get("success"):
+            st.session_state.environment_initialized = True
+            st.session_state.identified_survivors = []
+            st.success("✅ Environment initialized!")
+        else:
+            st.error(f"❌ Initialization failed: {result.get('error')}")
         st.rerun()
     
     # Force cache refresh button (fixes attribute errors from cached old versions)
@@ -200,23 +253,47 @@ col_log = st.container()
 # ---------------------------------------------------------------------------
 
 def fetch_state() -> Optional[dict]:
-    """Fetch current swarm state from local environment manager."""
+    """Fetch current swarm state from MCP server."""
     if not st.session_state.environment_initialized:
         return None
     
     try:
-        state = env_manager.get_state()
+        state = call_mcp_tool_sync("get_swarm_state")
+        if state.get("success") is False:
+            st.warning(f"Error fetching state: {state.get('error')}", icon="⚠️")
+            return None
+        
         st.session_state.last_state = state
         
-        # Sync movement paths from environment manager (if method exists)
-        if hasattr(env_manager, 'get_movement_paths'):
-            paths_result = env_manager.get_movement_paths()
-            if paths_result.get("success"):
-                st.session_state.drone_paths = paths_result.get("paths", {})
+        # Sync movement paths from MCP server
+        paths_result = call_mcp_tool_sync("get_movement_paths")
+        if paths_result.get("success"):
+            st.session_state.drone_paths = paths_result.get("paths", {})
         
         return state
     except Exception as e:
         st.warning(f"Error fetching state: {e}", icon="⚠️")
+        return None
+
+
+async def fetch_state_async() -> Optional[dict]:
+    """Async state fetch for in-mission live UI updates."""
+    if not st.session_state.environment_initialized:
+        return None
+
+    try:
+        state = await call_mcp_tool("get_swarm_state")
+        if state.get("success") is False:
+            return None
+
+        st.session_state.last_state = state
+
+        paths_result = await call_mcp_tool("get_movement_paths")
+        if paths_result.get("success"):
+            st.session_state.drone_paths = paths_result.get("paths", {})
+
+        return state
+    except Exception:
         return None
 
 
@@ -431,7 +508,7 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
             showgrid=True,
             gridwidth=1,
             gridcolor="lightgray",
-            autorange="reversed",  # Invert Y axis so (0,0) is top-left
+            # FIXED: Removed autorange="reversed" - now (0,0) is bottom-left
         ),
         width=800,
         height=700,
@@ -527,48 +604,48 @@ def render_mission_summary(state: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def create_langchain_tools():
-    """Create Langchain tools that interface with local environment manager."""
+    """Create Langchain tools that interface with MCP server."""
     
     @tool
     def get_swarm_state() -> str:
         """Get the current swarm state including all drones, grid, and survivors."""
-        state = env_manager.get_state()
-        return json.dumps(state)
+        result = call_mcp_tool_sync("get_swarm_state")
+        return json.dumps(result)
     
     @tool
     def move_drone(drone_id: str, dx: int, dy: int) -> str:
         """Move a drone by relative coordinates (dx, dy) where each is -1, 0, or 1."""
-        result = env_manager.move_drone(drone_id, dx, dy)
+        result = call_mcp_tool_sync("move_drone", drone_id=drone_id, dx=dx, dy=dy)
         return json.dumps(result)
     
     @tool
     def scan_area(drone_id: str, radius: int = 2) -> str:
         """Scan the area around a drone to reveal surrounding cells."""
-        result = env_manager.scan_area(drone_id, radius)
+        result = call_mcp_tool_sync("scan_area", drone_id=drone_id, radius=radius)
         return json.dumps(result)
     
     @tool
     def rescue_survivor(drone_id: str, target_x: int, target_y: int) -> str:
         """Rescue a survivor at the target location (drone must be adjacent)."""
-        result = env_manager.rescue_survivor(drone_id, target_x, target_y)
+        result = call_mcp_tool_sync("rescue_survivor", drone_id=drone_id, target_x=target_x, target_y=target_y)
         return json.dumps(result)
     
     @tool
     def return_to_base(drone_id: str) -> str:
         """Return a drone to base (0,0) and deliver cargo if carrying."""
-        result = env_manager.return_to_base(drone_id)
+        result = call_mcp_tool_sync("return_to_base", drone_id=drone_id)
         return json.dumps(result)
     
     @tool
     def get_survivor_counts() -> str:
         """Get counts of total, rescued, and remaining survivors."""
-        result = env_manager.get_survivor_counts()
+        result = call_mcp_tool_sync("get_survivor_counts")
         return json.dumps(result)
     
     @tool
     def get_drone_state(drone_id: str) -> str:
         """Get the state of a specific drone."""
-        result = env_manager.get_drone_state(drone_id)
+        result = call_mcp_tool_sync("get_drone_state", drone_id=drone_id)
         return json.dumps(result)
     
     return [
@@ -582,161 +659,119 @@ def create_langchain_tools():
     ]
 
 
-async def run_stream_agent(briefing: str):
-    """Run Langchain ARIA agent with local environment manager."""
+async def run_stream_agent(briefing: str, model_name: str = None):
+    """Run mission using single-prompt controller.
     
-    # Get placeholders for real-time updates
+    Args:
+        briefing: Mission briefing text
+        model_name: Display name of the model to use
+    """
+    from orchestrator.mission_controller import MissionController
+    
     status_placeholder = st.empty()
     log_placeholder = st.empty()
+    with col_grid:
+        live_grid_placeholder = st.empty()
+    with col_metrics:
+        live_summary_placeholder = st.empty()
+        live_drone_table_placeholder = st.empty()
+        live_survivor_placeholder = st.empty()
     
-    full_log = "🚁 ARIA Agent Initialized\n"
-    full_log += f"User Briefing: {briefing if briefing else 'Standard rescue protocol'}\n\n"
+    controller = MissionController(model_name=model_name)
+
+    async def refresh_live_sections() -> None:
+        state = await fetch_state_async()
+        if not state:
+            return
+
+        with live_grid_placeholder.container():
+            fig = render_grid_plotly(
+                state.get("grid", {}),
+                state.get("drones", []),
+                state.get("survivors", []),
+                st.session_state.drone_paths if st.session_state.show_paths else {},
+            )
+            if fig:
+                st.plotly_chart(fig, use_container_width=True, key="live_grid_plot")
+
+        with live_summary_placeholder.container():
+            st.subheader("📊 Mission Status")
+            st.markdown(render_mission_summary(state))
+
+        with live_drone_table_placeholder.container():
+            st.subheader("🚁 Drone Fleet")
+            drone_df = render_drone_table(state.get("drones", []))
+            if not drone_df.empty:
+                st.dataframe(drone_df, use_container_width=True, hide_index=True)
+
+        with live_survivor_placeholder.container():
+            st.subheader("📍 Identified Survivor Coordinates")
+            if st.session_state.identified_survivors:
+                coords = sorted(
+                    st.session_state.identified_survivors,
+                    key=lambda c: (c["x"], c["y"]),
+                )
+                st.dataframe(pd.DataFrame(coords), use_container_width=True, hide_index=True)
+            else:
+                st.caption("No survivors identified yet.")
     
     try:
-        # Initialize Langchain components
-        # --------- OPENROUTER (Active) ---------
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
-        if not api_key:
-            status_placeholder.error("❌ OPENROUTER_API_KEY not set. Add it to .env file.")
-            return full_log
+        status_placeholder.info("Initializing AI and starting mission...")
         
-        # Create LLM with OpenRouter
-        llm = ChatOpenAI(
-            model=model,
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
-            temperature=0,
-        )
+        full_log = ""
+        await refresh_live_sections()
         
-        # Create tools
-        tools = create_langchain_tools()
-        
-        # Create agent prompt
-        system_prompt = """You are ARIA (Autonomous Rescue Intelligence Agent), commanding a drone swarm in a rescue operation.
+        # Stream mission execution
+        async for chunk in controller.stream_mission(briefing):
+            if chunk.startswith("__EVENT__"):
+                try:
+                    event = json.loads(chunk[len("__EVENT__"):].strip())
+                except json.JSONDecodeError:
+                    event = {}
 
-OBJECTIVES (priority order):
-1. Explore the entire grid to find all survivors and hazards
-2. Rescue every survivor and return them to base (0,0)
-3. Manage drone battery levels (return to base when < 20%)
-4. Avoid hazards and obstacles
+                event_type = event.get("type")
+                if event_type == "movement_step":
+                    full_log += (
+                        f"STEP: {event.get('drone_id')} -> ({event.get('x')}, {event.get('y')}) "
+                        f"battery={event.get('battery')}%\n"
+                    )
+                    status_placeholder.info(
+                        f"{event.get('drone_id')} moved to ({event.get('x')}, {event.get('y')})"
+                    )
+                elif event_type == "survivor_detected":
+                    coord = {"x": int(event.get("x", -1)), "y": int(event.get("y", -1))}
+                    if coord not in st.session_state.identified_survivors:
+                        st.session_state.identified_survivors.append(coord)
+                        full_log += f"SURVIVOR DETECTED at ({coord['x']}, {coord['y']})\n"
+                        status_placeholder.success(
+                            f"Survivor identified at ({coord['x']}, {coord['y']})"
+                        )
 
-RULES:
-- Always start by calling get_swarm_state() to see current situation
-- Drone movements use move_drone() with dx,dy each being -1, 0, or 1
-- Scan before moving to unknown areas
-- When you find survivors (S), move adjacent and use rescue_survivor()
-- When carrying cargo, return to base with return_to_base()
-- Continuously monitor battery levels, especially drones with battery < 20%
+                await refresh_live_sections()
+            else:
+                full_log += chunk
 
-At each turn, provide:
-1. Current situation analysis
-2. Planned actions for each drone
-3. Critical issues or hazards detected
+            await asyncio.sleep(0.01)
 
-Be concise but strategic."""
-        
-        prompt_template = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("user", f"Mission briefing: {briefing if briefing else 'Execute standard rescue protocol with drone swarm.'}")
-        ])
-        
-        # Bind tools to LLM
-        llm_with_tools = llm.bind_tools(tools)
-        
-        # Run agent loop
-        status_placeholder.info("🌀 ARIA Agent Starting Mission...")
-        
-        messages = [SystemMessage(content=system_prompt)]
-        mission_active = True
-        turn_count = 0
-
-        while mission_active and turn_count < 15:  # Limit to 15 turns
-            turn_count += 1
-            turn_log = f"\n--- TURN {turn_count} ---\n"
-
-            # Get state
-            state = env_manager.get_state()
-            survivors_remaining = state.get("survivors_at_base", [])
-            all_survivors = len(state.get("survivors", []))
-
-            # Check win condition
-            rescuedcount = len(state.get("survivors_at_base", []))
-            if rescuedcount == all_survivors:
-                turn_log += "✅ ALL SURVIVORS RESCUED! Mission complete!\n"
-                full_log += turn_log
-                mission_active = False
-                break
-
-            # Add user message for this turn
-            user_msg = f"Turn {turn_count}: {rescuedcount}/{all_survivors} survivors rescued. Execute next action."
-            messages.append(HumanMessage(content=user_msg))
-
-            # Get LLM response
-            response = llm_with_tools.invoke(messages)
-
-            # Add assistant response to messages (response is already an AIMessage)
-            messages.append(response)
-
-            # Extract text content for logging (content may be a string or list)
-            if isinstance(response.content, str):
-                turn_log += response.content + "\n"
-            elif isinstance(response.content, list):
-                for block in response.content:
-                    if isinstance(block, str):
-                        turn_log += block + "\n"
-                    elif isinstance(block, dict) and block.get("type") == "text":
-                        turn_log += block.get("text", "") + "\n"
-
-            # Process tool calls if any
-            if hasattr(response, 'tool_calls') and response.tool_calls:
-                for tool_call in response.tool_calls:
-                    tool_name = tool_call['name']
-                    tool_args = tool_call['args']
-                    tool_call_id = tool_call.get('id', tool_name)
-                    turn_log += f"🔧 Executing: {tool_name}({tool_args})\n"
-
-                    # Execute the tool
-                    result_str = ""
-                    for t in tools:
-                        if t.name == tool_name:
-                            try:
-                                result_str = t.func(**tool_args)
-                                result_dict = json.loads(result_str)
-                                if result_dict.get("success"):
-                                    turn_log += f"✓ {tool_name} succeeded\n"
-                                else:
-                                    turn_log += f"✗ {tool_name}: {result_dict.get('error', 'Unknown error')}\n"
-                            except Exception as e:
-                                result_str = json.dumps({"error": str(e)})
-                                turn_log += f"✗ Tool error: {str(e)}\n"
-                            break
-
-                    # Feed tool result back to the LLM
-                    messages.append(ToolMessage(
-                        content=result_str,
-                        tool_call_id=tool_call_id,
-                    ))
-            
-            # Update UI with real-time log
-            full_log += turn_log
             with log_placeholder.container():
-                st.markdown("### 📋 ARIA Mission Log")
-                st.code(full_log, language="text")
-            
-            await asyncio.sleep(0.5)
+                st.markdown("### MISSION LOG")
+                st.code(full_log[-5000:], language="text")
         
-        # Final status
-        state = env_manager.get_state()
-        final_status = f"\n✅ Mission completed after {turn_count} turns\n"
-        final_status += f"Survivors rescued: {len(state.get('survivors_at_base', []))} / {len(state.get('survivors', []))}\n"
-        full_log += final_status
+        # Final log update
+        with log_placeholder.container():
+            st.markdown("### MISSION LOG")
+            st.code(full_log, language="text")
+
+        await refresh_live_sections()
         
-        status_placeholder.success("✅ ARIA mission cycle complete!")
+        status_placeholder.success("Mission complete!")
         
     except Exception as e:
-        full_log += f"\n❌ Agent error: {str(e)}\n"
-        status_placeholder.error(f"❌ Agent error: {e}")
+        full_log += f"\nERROR: {str(e)}\n"
+        status_placeholder.error(f"Mission failed: {e}")
+        with log_placeholder.container():
+            st.markdown("### MISSION LOG")
+            st.code(full_log, language="text")
     
     st.session_state.mission_log = full_log
     return full_log
@@ -748,6 +783,8 @@ Be concise but strategic."""
 
 if launch_btn:
     st.session_state.mission_active = True
+    st.session_state.mission_complete = False
+    st.session_state.identified_survivors = []
     st.rerun()
 
 if stop_btn:
@@ -757,10 +794,11 @@ if stop_btn:
 
 # Run agent if mission is active
 if st.session_state.mission_active and not st.session_state.mission_complete:
-    # Run the streaming agent
-    agent_output = asyncio.run(run_stream_agent(mission_briefing))
+    # Run the streaming agent with selected model
+    agent_output = asyncio.run(run_stream_agent(mission_briefing, st.session_state.selected_model))
     st.session_state.mission_log = agent_output
     st.session_state.mission_active = False
+    st.session_state.mission_complete = True
 
 # Display mission log if available
 if st.session_state.mission_log:
@@ -793,7 +831,7 @@ else:
                     st.session_state.drone_paths if st.session_state.show_paths else {}
                 )
                 if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key="main_grid_plot")
                 else:
                     st.warning("Cannot render grid map.")
         
@@ -809,6 +847,16 @@ else:
                 st.dataframe(drone_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No drone data available")
+
+            st.subheader("📍 Identified Survivor Coordinates")
+            if st.session_state.identified_survivors:
+                coords = sorted(
+                    st.session_state.identified_survivors,
+                    key=lambda c: (c["x"], c["y"]),
+                )
+                st.dataframe(pd.DataFrame(coords), use_container_width=True, hide_index=True)
+            else:
+                st.caption("No survivors identified yet.")
     else:
         with col_grid:
             st.error(
