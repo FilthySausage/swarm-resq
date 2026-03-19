@@ -1,13 +1,13 @@
 """
-agent.py — LangChain AI Command Agent (Gemini free-tier)
+agent.py — LangChain AI Command Agent (OpenRouter)
 Member 1 (Agent/AI) workspace.
 
 Connects to the FastMCP server, loads drone tools via the
-langchain-mcp-adapters bridge, and drives a Gemini ReAct agent loop
+langchain-mcp-adapters bridge, and drives an OpenRouter ReAct agent loop
 with multi-turn memory, mission tracking, and streaming support.
 
 Prerequisites:
-    - Copy .env.example → .env and set GOOGLE_API_KEY.
+    - Copy .env.example → .env and set OPENROUTER_API_KEY.
     - pip install -r requirements.txt
 
 Run standalone test:
@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from orchestrator.prompts import MISSION_START_PROMPT
 from orchestrator.memory import ConversationMemoryBuffer, MissionMemory
@@ -35,13 +35,14 @@ from orchestrator.mission import MissionMonitor, MissionStatus
 # ---------------------------------------------------------------------------
 load_dotenv()
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-if not GOOGLE_API_KEY:
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
     raise EnvironmentError(
-        "GOOGLE_API_KEY is not set. "
+        "OPENROUTER_API_KEY is not set. "
         "Copy .env.example to .env and add your key from "
-        "https://aistudio.google.com/app/apikey"
+        "https://openrouter.ai/keys"
     )
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
 
 # Server URLs
 SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8000")
@@ -252,11 +253,11 @@ class MultiTurnAgent:
         Execute one full agent reasoning and action cycle using plain-text ReAct loop.
         """
         try:
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
-                google_api_key=GOOGLE_API_KEY,
+            llm = ChatOpenAI(
+                model=OPENROUTER_MODEL,
+                api_key=OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
                 temperature=0,
-                convert_system_message_to_human=True,
             )
             
             # Get mission context
@@ -368,11 +369,11 @@ Available Tools (call them using this format: [TOOL: tool_name(param1=value1, pa
         Execute one cycle with streaming output (token-by-token) using plain-text ReAct.
         """
         try:
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
-                google_api_key=GOOGLE_API_KEY,
+            llm = ChatOpenAI(
+                model=OPENROUTER_MODEL,
+                api_key=OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
                 temperature=0,
-                convert_system_message_to_human=True,
                 streaming=True,
             )
 

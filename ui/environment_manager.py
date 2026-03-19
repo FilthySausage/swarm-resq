@@ -121,6 +121,7 @@ class EnvironmentManager:
         survivors = [survivor.to_dict() for survivor in self.survivors.values()]
 
         return {
+            "success": True,
             "turn": self.turn_count,
             "grid": {
                 "width": self.width,
@@ -291,6 +292,7 @@ class EnvironmentManager:
         rescued = len(self.survivors_at_base)
         remaining = sum(1 for s in self.survivors.values() if not s.rescued)
         return {
+            "success": True,
             "total_survivors": total,
             "rescued": rescued,
             "remaining": remaining,

@@ -30,8 +30,7 @@ from ui.environment_manager import EnvironmentManager
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-# from langchain_openai import ChatOpenAI  # Commented: Using Gemini instead
+from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -535,18 +534,19 @@ async def run_stream_agent(briefing: str):
     
     try:
         # Initialize Langchain components
-        # --------- GEMINI (Active) ---------
-        api_key = os.getenv("GOOGLE_API_KEY")
+        # --------- OPENROUTER (Active) ---------
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
         if not api_key:
-            status_placeholder.error("❌ GOOGLE_API_KEY not set. Add it to .env file.")
+            status_placeholder.error("❌ OPENROUTER_API_KEY not set. Add it to .env file.")
             return full_log
         
-        # Create LLM with Gemini
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=api_key,
+        # Create LLM with OpenRouter
+        llm = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
             temperature=0,
-            convert_system_message_to_human=True,
         )
         
         # Create tools
