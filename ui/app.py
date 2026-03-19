@@ -85,6 +85,10 @@ if "environment_initialized" not in st.session_state:
     st.session_state.environment_initialized = False
 if "last_state" not in st.session_state:
     st.session_state.last_state = None
+if "drone_paths" not in st.session_state:
+    st.session_state.drone_paths = {}  # Track movement paths for visualization
+if "show_paths" not in st.session_state:
+    st.session_state.show_paths = True  # Display movement paths
 
 # ---------------------------------------------------------------------------
 # Sidebar controls
@@ -122,6 +126,11 @@ with st.sidebar:
         st.success("✅ Environment initialized!")
         st.rerun()
     
+    # Force cache refresh button (fixes attribute errors from cached old versions)
+    if st.button("🔄 Refresh Cache", use_container_width=True, help="Clear cached objects and reload"):
+        st.cache_resource.clear()
+        st.rerun()
+    
     st.divider()
     
     # Mission briefing input
@@ -154,6 +163,7 @@ with st.sidebar:
     st.subheader("📊 Display Options")
     show_grid = st.checkbox("Show Grid", value=True)
     show_legend = st.checkbox("Show Legend", value=True)
+    st.session_state.show_paths = st.checkbox("Show Movement Paths", value=True)
     auto_refresh = st.checkbox("Auto-refresh", value=True)
     
     if auto_refresh:
@@ -197,6 +207,13 @@ def fetch_state() -> Optional[dict]:
     try:
         state = env_manager.get_state()
         st.session_state.last_state = state
+        
+        # Sync movement paths from environment manager (if method exists)
+        if hasattr(env_manager, 'get_movement_paths'):
+            paths_result = env_manager.get_movement_paths()
+            if paths_result.get("success"):
+                st.session_state.drone_paths = paths_result.get("paths", {})
+        
         return state
     except Exception as e:
         st.warning(f"Error fetching state: {e}", icon="⚠️")
@@ -216,8 +233,10 @@ def render_grid_emoji(grid_data: dict) -> str:
     return "\n".join(rows)
 
 
-def render_grid_plotly(grid_data: dict, drones: list, survivors: list) -> go.Figure:
-    """Render interactive grid visualization with drones and survivors using Plotly."""
+def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_paths: dict = None) -> go.Figure:
+    """Render interactive grid visualization with drones, survivors, and movement paths using Plotly."""
+    if drone_paths is None:
+        drone_paths = {}
     if not grid_data or "cells" not in grid_data:
         return None
     
@@ -318,7 +337,48 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list) -> go.Fig
                 name="Drones",
             ))
     
-    # Add survivor markers if available
+    # Add movement path traces if available
+    if drone_paths:
+        for drone_id, path_info in drone_paths.items():
+            path = path_info.get("path", [])
+            if len(path) > 1:
+                path_xs = [p["x"] for p in path]
+                path_ys = [p["y"] for p in path]
+                
+                # Find corresponding drone for color matching
+                drone_color = "lightblue"
+                for drone in drones:
+                    if drone.get("drone_id") == drone_id:
+                        battery = drone.get("battery", 0)
+                        if battery > 60:
+                            drone_color = "blue"
+                        elif battery > 30:
+                            drone_color = "orange"
+                        else:
+                            drone_color = "red"
+                        break
+                
+                # Add path line
+                fig.add_trace(go.Scatter(
+                    x=path_xs,
+                    y=path_ys,
+                    mode="lines+markers",
+                    line=dict(
+                        color=drone_color,
+                        width=2,
+                        dash="dash",
+                    ),
+                    marker=dict(
+                        size=4,
+                        color=drone_color,
+                        opacity=0.6,
+                    ),
+                    name=f"{drone_id} Path",
+                    hoverinfo="skip",
+                    showlegend=False,
+                ))
+    
+
     if survivors:
         survivor_xs = []
         survivor_ys = []
@@ -725,11 +785,12 @@ else:
     if state:
         with col_grid:
             if show_grid:
-                # Render interactive Plotly map
+                # Render interactive Plotly map with movement paths
                 fig = render_grid_plotly(
                     state.get("grid", {}),
                     state.get("drones", []),
-                    state.get("survivors", [])
+                    state.get("survivors", []),
+                    st.session_state.drone_paths if st.session_state.show_paths else {}
                 )
                 if fig:
                     st.plotly_chart(fig, use_container_width=True)
@@ -754,6 +815,40 @@ else:
                 "❌ Cannot fetch environment state. "
                 "Please ensure environment is properly initialized."
             )
+
+# ---------------------------------------------------------------------------
+# Movement Status Display
+# ---------------------------------------------------------------------------
+if st.session_state.drone_paths:
+    st.divider()
+    st.subheader("📍 Movement Paths")
+    
+    # Create columns for path information
+    path_cols = st.columns(len(st.session_state.drone_paths))
+    
+    for idx, (drone_id, path_info) in enumerate(st.session_state.drone_paths.items()):
+        with path_cols[idx]:
+            st.markdown(f"**{drone_id}**")
+            
+            if isinstance(path_info, dict) and "path" in path_info:
+                path = path_info.get("path", [])
+                stopped_reason = path_info.get("stopped_reason", "unknown")
+                battery_used = path_info.get("battery_used", 0)
+                battery_remaining = path_info.get("battery_remaining", 0)
+                moves_count = path_info.get("moves_count", len(path) - 1)
+                
+                # Display path stats
+                st.metric("Steps", moves_count)
+                st.metric("Stopped By", stopped_reason.replace("_", " ").title())
+                st.metric("Battery Used", battery_used)
+                
+                # Display path coordinates
+                if len(path) > 1:
+                    with st.expander(f"Path Coordinates ({len(path)} positions)"):
+                        path_text = "→ ".join([f"({p['x']}, {p['y']})" for p in path])
+                        st.caption(path_text)
+            else:
+                st.caption("No path data available")
 
 # ---------------------------------------------------------------------------
 # Session/debug info

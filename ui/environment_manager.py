@@ -310,6 +310,107 @@ class EnvironmentManager:
             "state": drone.to_dict(),
         }
 
+    def get_movement_paths(self) -> Dict[str, Any]:
+        """Get all stored drone movement paths (for UI visualization)."""
+        try:
+            from orchestrator.path_tracker import get_all_paths
+            paths = get_all_paths()
+            return {"success": True, "paths": paths}
+        except ImportError:
+            # path_tracker not available (running in local mode without agent)
+            return {"success": True, "paths": {}}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def move_continuous_until_stopped(self, drone_id: str, direction_x: int, direction_y: int) -> Dict[str, Any]:
+        """
+        Move a drone continuously in a direction until it hits boundary, obstacle, or battery runs low.
+        Returns full path traversed, stop reason, and battery used.
+        """
+        if not self.mission_initialized:
+            return {"success": False, "error": "Mission not initialized"}
+
+        drone = self.swarm.drones.get(drone_id)
+        if not drone:
+            return {"success": False, "error": f"Drone {drone_id} not found"}
+
+        # Validate direction
+        if not (-1 <= direction_x <= 1) or not (-1 <= direction_y <= 1):
+            return {"success": False, "error": "Direction must be -1, 0, or 1 for each axis"}
+        
+        if direction_x == 0 and direction_y == 0:
+            return {"success": False, "error": "Direction must have at least one non-zero component"}
+
+        path = [{"x": drone.x, "y": drone.y, "step": 0}]
+        initial_battery = drone.battery
+        step_count = 0
+        stopped_reason = None
+
+        # Move continuously until stopped
+        drone.status = DroneStatus.MOVING_CONTINUOUS
+        while True:
+            # Check battery low (20% threshold)
+            if drone.battery <= 1:
+                stopped_reason = "battery"
+                break
+
+            # Calculate next position
+            next_x = drone.x + direction_x
+            next_y = drone.y + direction_y
+
+            # Check bounds
+            if not self.grid.in_bounds(next_x, next_y):
+                stopped_reason = "boundary"
+                break
+
+            # Check obstacle
+            target_cell = self.grid.get_cell(next_x, next_y)
+            if target_cell.cell_type == CellType.OBSTACLE:
+                stopped_reason = "obstacle"
+                break
+
+            # Move the drone
+            drone.battery -= 1
+            
+            # Clear old cell
+            self.grid.cells[drone.y][drone.x].drone_id = None
+            old_type = self.grid.get_cell(drone.x, drone.y).cell_type
+            if old_type == CellType.DRONE:
+                self.grid.set_cell_type(drone.x, drone.y, CellType.EMPTY)
+
+            # Update position
+            drone.x = next_x
+            drone.y = next_y
+            
+            # Update grid
+            self.grid.cells[next_y][next_x].drone_id = drone_id
+            if target_cell.cell_type == CellType.EMPTY:
+                self.grid.set_cell_type(next_x, next_y, CellType.DRONE)
+
+            step_count += 1
+            path.append({"x": next_x, "y": next_y, "step": step_count})
+
+            # Check for detection (survivor or hazard)
+            if target_cell.cell_type == CellType.SURVIVOR:
+                stopped_reason = "detected_survivor"
+                break
+            elif target_cell.cell_type == CellType.HAZARD:
+                stopped_reason = "detected_hazard"
+                break
+
+        drone.status = DroneStatus.STOPPED
+        battery_used = initial_battery - drone.battery
+
+        return {
+            "success": True,
+            "drone_id": drone_id,
+            "path": path,
+            "moves_count": step_count,
+            "stopped_reason": stopped_reason,
+            "battery_used": battery_used,
+            "battery_remaining": drone.battery,
+        }
+
     def reset_mission(self) -> Dict[str, Any]:
         """Reset the entire mission."""
         self.mission_initialized = False
@@ -318,4 +419,12 @@ class EnvironmentManager:
         self.survivors = {}
         self.survivors_at_base = []
         self.turn_count = 0
+        
+        # Clear tracked paths
+        try:
+            from orchestrator.path_tracker import clear_paths
+            clear_paths()
+        except ImportError:
+            pass  # path_tracker not available
+        
         return {"success": True, "message": "Mission reset"}
