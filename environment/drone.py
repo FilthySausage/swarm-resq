@@ -91,6 +91,8 @@ class DroneSwarm:
             return {"success": False, "error": "Target cell not found."}
         if target_cell.cell_type == CellType.OBSTACLE:
             return {"success": False, "error": "Cell is an obstacle."}
+        if target_cell.cell_type == CellType.HAZARD:
+            return {"success": False, "error": "Cell is a hazard."}
 
         self._clear_drone_from_cell(drone.x, drone.y)
 
@@ -255,8 +257,8 @@ class DroneSwarm:
                 break
 
             target_cell = self.grid.get_cell(new_x, new_y)
-            if target_cell and target_cell.cell_type == CellType.OBSTACLE:
-                stopped_reason = "obstacle"
+            if target_cell and target_cell.cell_type in (CellType.OBSTACLE, CellType.HAZARD):
+                stopped_reason = "hazard" if target_cell.cell_type == CellType.HAZARD else "obstacle"
                 break
 
             self._clear_drone_from_cell(drone.x, drone.y)
@@ -318,8 +320,8 @@ class DroneSwarm:
                 break
 
             target_cell = self.grid.get_cell(new_x, new_y)
-            if target_cell and target_cell.cell_type == CellType.OBSTACLE:
-                stopped_reason = "obstacle"
+            if target_cell and target_cell.cell_type in (CellType.OBSTACLE, CellType.HAZARD):
+                stopped_reason = "hazard" if target_cell.cell_type == CellType.HAZARD else "obstacle"
                 break
 
             self._clear_drone_from_cell(drone.x, drone.y)

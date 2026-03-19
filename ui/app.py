@@ -407,11 +407,13 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
     }
     
     # Fill the grid
-    for y, row in enumerate(cells):
-        for x, cell in enumerate(row):
+    for row in cells:
+        for cell in row:
+            cx = cell.get("x", 0)
+            cy = cell.get("y", 0)
             cell_type = cell.get("type", ".")
-            grid_visual[y][x] = cell_color_map.get(cell_type, 0)
-            grid_labels[y][x] = f"({x}, {y})<br>{cell_name_map.get(cell_type, 'Unknown')}"
+            grid_visual[cy][cx] = cell_color_map.get(cell_type, 0)
+            grid_labels[cy][cx] = f"({cx}, {cy})<br>{cell_name_map.get(cell_type, 'Unknown')}"
     
     # Create figure with custom colorscale
     fig = go.Figure()

@@ -100,12 +100,19 @@ class PlanExecutor:
             MissionPlan object or None if invalid
         """
         try:
-            # Extract JSON from response (handle markdown code blocks)
+            import re
             json_str = json_response.strip()
-            if json_str.startswith("```json"):
-                json_str = json_str.split("```json")[1].split("```")[0].strip()
-            elif json_str.startswith("```"):
-                json_str = json_str.split("```")[1].split("```")[0].strip()
+            
+            # Robust JSON extraction
+            m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', json_str, re.DOTALL)
+            if m:
+                json_str = m.group(1).strip()
+            else:
+                # Fallback to finding the first { and last }
+                start_idx = json_str.find('{')
+                end_idx = json_str.rfind('}')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    json_str = json_str[start_idx:end_idx+1]
             
             # Parse JSON
             data = json.loads(json_str)
