@@ -142,6 +142,13 @@ class SimulationEngine:
             place_hazards(self.grid, count=hazard_count)
             survivors = place_survivors(self.grid, count=survivor_count)
             
+            # Clear movement path cache
+            try:
+                from orchestrator.path_tracker import clear_paths
+                clear_paths()
+            except ImportError:
+                pass
+            
             result = {
                 "success": True,
                 "mission_id": self.mission_id,
@@ -171,6 +178,13 @@ class SimulationEngine:
             self.swarm = None
             self.state = SimulationState.NOT_STARTED
             self.move_count = 0
+            
+            try:
+                from orchestrator.path_tracker import clear_paths
+                clear_paths()
+            except ImportError:
+                pass
+                
             return {"success": True, "message": "Mission reset"}
     
     async def get_swarm_state(self) -> Dict[str, Any]:
