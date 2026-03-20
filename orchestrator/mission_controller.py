@@ -11,6 +11,7 @@ Behavior:
 import asyncio
 import json
 import os
+import re
 from typing import Any, AsyncGenerator, Dict, Optional
 
 import httpx
@@ -57,6 +58,123 @@ class MissionController:
         self.obstacle_cells: set[tuple[int, int]] = set()
         self.hazard_cells: set[tuple[int, int]] = set()
         self.blocked_cells: set[tuple[int, int]] = set()
+        self.drone_pos_history: dict[str, list[tuple[int, int]]] = {}
+        self.drone_stuck_turns: dict[str, int] = {}
+
+    def _extract_json_payload(self, text: str) -> Optional[Dict[str, Any]]:
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+
+        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+        if m:
+            raw = m.group(1).strip()
+        else:
+            s = raw.find("{")
+            e = raw.rfind("}")
+            if s != -1 and e != -1 and e > s:
+                raw = raw[s:e + 1]
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    def _next_direction_for(self, idx: int) -> str:
+        # Spread drones by default and rotate each turn to reduce overlap.
+        directions = [
+            "north", "east", "south", "west",
+            "north_east", "north_west", "south_east", "south_west",
+        ]
+        return directions[(self.turn_count + idx) % len(directions)]
+
+    def _update_stuck_tracking(self, state: Dict[str, Any]) -> None:
+        for idx, drone in enumerate(state.get("drones", [])):
+            drone_id = str(drone.get("drone_id", f"drone-{idx+1}"))
+            pos = (int(drone.get("x", 0)), int(drone.get("y", 0)))
+            history = self.drone_pos_history.setdefault(drone_id, [])
+            history.append(pos)
+            if len(history) > 4:
+                history.pop(0)
+
+            stuck_turns = self.drone_stuck_turns.get(drone_id, 0)
+            # ABAB oscillation or no movement for 3+ samples => treat as stuck.
+            oscillating = len(history) >= 4 and history[-1] == history[-3] and history[-2] == history[-4]
+            no_progress = len(history) >= 3 and history[-1] == history[-2] == history[-3]
+            if oscillating or no_progress:
+                self.drone_stuck_turns[drone_id] = stuck_turns + 1
+            else:
+                self.drone_stuck_turns[drone_id] = 0
+
+    def _enforce_turn_assignments(self, state: Dict[str, Any], plan_json: str) -> str:
+        payload = self._extract_json_payload(plan_json)
+        if not isinstance(payload, dict):
+            return plan_json
+
+        assignments = payload.get("drone_assignments")
+        if not isinstance(assignments, list):
+            assignments = []
+
+        # Normalize existing assignments map by drone_id.
+        by_drone: Dict[str, Dict[str, Any]] = {}
+        for item in assignments:
+            if not isinstance(item, dict):
+                continue
+            drone_id = str(item.get("drone_id", "")).strip()
+            if not drone_id:
+                continue
+            by_drone[drone_id] = item
+
+        low_battery_drones: list[str] = []
+        active_search_drones: list[str] = []
+
+        drones = state.get("drones", [])
+        for idx, drone in enumerate(drones):
+            drone_id = str(drone.get("drone_id", f"drone-{idx+1}"))
+            battery = int(drone.get("battery", 0))
+            stuck = int(self.drone_stuck_turns.get(drone_id, 0))
+
+            item = by_drone.get(drone_id, {
+                "drone_id": drone_id,
+                "action": "search_continuous",
+                "direction": self._next_direction_for(idx),
+                "reason": "Auto-filled assignment",
+            })
+
+            # Hard rule: <=20% return to base as early as possible.
+            if battery <= 20:
+                item["action"] = "return_to_base"
+                item["direction"] = None
+                item["reason"] = "Battery <=20, returning to base"
+                low_battery_drones.append(drone_id)
+            else:
+                # If repeatedly stuck, let other drones search first this turn.
+                if stuck >= 2:
+                    item["action"] = "idle"
+                    item["direction"] = None
+                    item["reason"] = "Temporarily idle: repeatedly stuck"
+                else:
+                    action = str(item.get("action", "search_continuous")).strip().lower()
+                    if action not in {"search_continuous", "return_to_base", "idle"}:
+                        item["action"] = "search_continuous"
+                    if item.get("action") == "search_continuous" and not item.get("direction"):
+                        item["direction"] = self._next_direction_for(idx)
+                    active_search_drones.append(drone_id)
+
+            by_drone[drone_id] = item
+
+        payload["drone_assignments"] = [by_drone[str(d.get("drone_id"))] for d in drones if str(d.get("drone_id")) in by_drone]
+        payload["search_strategy"] = "turn_step"
+        payload["battery_management"] = {
+            "low_battery_drones": low_battery_drones,
+            "active_search_drones": active_search_drones,
+            "recall_threshold": 20,
+        }
+
+        return json.dumps(payload)
 
     def _build_model_candidates(self, primary_config: Dict[str, Any]) -> list[Dict[str, Any]]:
         # Future-proofing: could append fallback models here. Just use primary for now.
@@ -330,6 +448,8 @@ class MissionController:
                 yield f"ERROR: Failed to fetch swarm state: {state.get('error', 'unknown')}\n"
                 return
 
+            self._update_stuck_tracking(state)
+
             turn_plan_json = await self.request_turn_plan(state, briefing)
             if not turn_plan_json:
                 yield "WARN: AI plan unavailable; skipping this turn (fallback disabled).\n"
@@ -340,6 +460,9 @@ class MissionController:
                 continue
 
             yield "AI decision received for this turn. Executing movements...\n"
+
+            # Enforce mission-critical constraints even if model output is weak.
+            turn_plan_json = self._enforce_turn_assignments(state, turn_plan_json)
 
             execution = await self._execute_plan_json(turn_plan_json)
             if not execution.get("success"):
