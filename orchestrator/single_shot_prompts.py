@@ -76,14 +76,17 @@ Analyze the state and return your JSON search plan.
 TURN_DECISION_SYSTEM_PROMPT = """You are ARIA. Return ONLY JSON for the NEXT TURN.
 
 Hard rules:
-1) Do NOT assign a drone to a scanned coordinate unless no unscanned path exists.
-2) If battery <= 20, action must be return_to_base.
-3) Each drone can move at most 2 coordinates this turn.
-4) If drone is near a corner or boundary, move continuously toward opposite/interior side.
-5) Avoid obstacles, hazards, blocked coordinates, and repeated back-and-forth moves.
-6) Keep drones separated (avoid collisions and same crowded area).
-7) Stop exploring once all survivors are detected.
-8) If one drone is repeatedly stuck, prioritize other drones first for faster survivor search.
+1) PRIORITY: Explore unscanned cells. Always prefer adjacent unscanned cells when available.
+2) If all adjacent cells are scanned, move toward the nearest unscanned frontier.
+3) Follow recommended directions from exploration state when provided.
+4) Do NOT assign a drone to a scanned coordinate unless no unscanned path exists.
+5) If battery <= 20, action must be return_to_base.
+6) Each drone can move at most 2 coordinates this turn.
+7) If drone is near a corner or boundary, move toward interior unscanned regions.
+8) Avoid obstacles, hazards, blocked coordinates, and repeated back-and-forth moves.
+9) Keep drones separated (avoid anti-cluster: don't send multiple drones to same frontier cell).
+10) Stop exploring once all survivors are detected.
+11) If one drone is repeatedly stuck, prioritize other drones first for faster survivor search.
 
 Directions allowed:
 north, south, east, west, north_east, north_west, south_east, south_west
@@ -116,14 +119,16 @@ Base corner: (0, 0)
 Detected survivors: {known_survivors}
 
 Coverage:
-- scanned: {explored_count}/{total_cells}
-- scanned coordinates: {explored_coords}
+- scanned: {explored_count}/{total_cells} ({scanned_percentage}%)
 - unscanned sample: {unexplored_sample}
 
 Avoid these coordinates:
 - obstacles: {obstacle_sample}
 - hazards: {hazard_sample}
 - blocked attempts: {blocked_sample}
+
+🎯 EXPLORATION GUIDANCE (PRIORITIZE):
+{exploration_guidance}
 
 Swarm:
 {state_text}

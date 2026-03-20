@@ -45,7 +45,7 @@ class MissionController:
         self.turn_count = 0
         self.max_turns = 60
         self.turn_delay_seconds = 2.0
-        self.max_steps_per_drone_turn = 2
+        self.max_steps_per_drone_turn = 3
 
         self.initial_plan_json: Optional[str] = None
         self.current_plan_json: Optional[str] = None
@@ -355,21 +355,52 @@ class MissionController:
             if (x, y) not in self.explored_cells
         ] if width > 0 and height > 0 else []
         explored_coords = sorted(self.explored_cells)
-        unexplored_sample = unexplored[:12]
+        unexplored_sample = unexplored[:30]
         obstacle_sample = sorted(self.obstacle_cells)[:20]
         hazard_sample = sorted(self.hazard_cells)[:20]
         blocked_sample = sorted(self.blocked_cells)[:20]
+        
+        # Format exploration guidance for AI
+        exploration_data = state.get("exploration", {})
+        scanned_pct = exploration_data.get("scanned_percentage", 0)
+        total_unscanned = exploration_data.get("total_unscanned_cells", 0)
+        
+        exploration_lines = [
+            f"Scanned: {scanned_pct}% | Unscanned cells: {total_unscanned}"
+        ]
+        
+        drone_guidance = exploration_data.get("drones", {})
+        for drone_id in sorted(drone_guidance.keys()):
+            guidance = drone_guidance[drone_id]
+            target = guidance.get("target_cell")
+            direction = guidance.get("recommended_direction")
+            strategy = guidance.get("strategy", "idle")
+            reason = guidance.get("reason", "")
+            battery = guidance.get("battery", 0)
+            
+            if direction:
+                exploration_lines.append(
+                    f"  {drone_id} ({battery}%): Move {direction} → {target} ({strategy})"
+                )
+            else:
+                exploration_lines.append(
+                    f"  {drone_id} ({battery}%): {strategy} - {reason}"
+                )
+        
+        exploration_guidance = "\n".join(exploration_lines)
+        
         turn_message = TURN_DECISION_USER_TEMPLATE.format(
             turn_no=self.turn_count,
             briefing=briefing or "Systematic survivor coordinate discovery",
             known_survivors=self.discovered_survivors,
             explored_count=len(self.explored_cells),
             total_cells=total_cells,
-            explored_coords=explored_coords,
+            scanned_percentage=scanned_pct,
             unexplored_sample=unexplored_sample,
             obstacle_sample=obstacle_sample,
             hazard_sample=hazard_sample,
             blocked_sample=blocked_sample,
+            exploration_guidance=exploration_guidance,
             state_text=state_text,
         )
 

@@ -92,6 +92,7 @@ class DroneSwarm:
         """
         Move a drone by (dx, dy) using bottom-left origin coordinates.
         Includes collision avoidance check.
+        Marks visited cells as scanned.
         """
         drone = self.drones.get(drone_id)
         if not drone:
@@ -126,6 +127,13 @@ class DroneSwarm:
 
         self._place_drone_on_cell(drone_id, new_x, new_y)
         
+        # Mark cell and surroundings as scanned (radius=1 for immediate vicinity)
+        for dy_scan in [-1, 0, 1]:
+            for dx_scan in [-1, 0, 1]:
+                scan_x, scan_y = new_x + dx_scan, new_y + dy_scan
+                if self.grid.in_bounds(scan_x, scan_y):
+                    self.grid.mark_cell_scanned(scan_x, scan_y)
+        
         # Update collision avoidance tracking
         self.collision_manager.update_drone_position(drone_id, new_x, new_y)
         
@@ -155,6 +163,9 @@ class DroneSwarm:
                 cell = self.grid.get_cell(cx, cy)
                 if cell is None:
                     continue
+
+                # Mark cell as scanned
+                self.grid.mark_cell_scanned(cx, cy)
 
                 if cell.cell_type not in (CellType.EMPTY, CellType.DRONE):
                     found.append({"x": cx, "y": cy, "type": cell.cell_type.value})
@@ -248,6 +259,235 @@ class DroneSwarm:
             "in_cargo": survivors_in_cargo,
             "rescued": len(self.survivors_at_base),
             "total_found": survivors_on_grid + survivors_in_cargo + len(self.survivors_at_base),
+        }
+
+    def _direction_to_target(self, from_x: int, from_y: int, target_x: int, target_y: int) -> str:
+        """
+        Calculate direction toward target using 8-directional movement.
+        Uses Chebyshev distance (max of absolute differences) for 8-way movement.
+        
+        Args:
+            from_x, from_y: Starting position
+            target_x, target_y: Target position
+            
+        Returns:
+            Direction string: north, south, east, west, north_east, north_west, south_east, south_west
+        """
+        dx = target_x - from_x
+        dy = target_y - from_y
+        
+        # Normalize to -1, 0, 1
+        x_dir = 0 if dx == 0 else (1 if dx > 0 else -1)
+        y_dir = 0 if dy == 0 else (1 if dy > 0 else -1)
+        
+        # Map to direction names
+        direction_map = {
+            (0, 1): "north",
+            (0, -1): "south",
+            (1, 0): "east",
+            (-1, 0): "west",
+            (1, 1): "north_east",
+            (-1, 1): "north_west",
+            (1, -1): "south_east",
+            (-1, -1): "south_west",
+        }
+        
+        return direction_map.get((x_dir, y_dir), "north")
+
+    def _get_adjacent_unscanned(self, drone_x: int, drone_y: int) -> list[tuple[int, int]]:
+        """
+        Get all adjacent unscanned cells (8-directional neighbors).
+        
+        Args:
+            drone_x, drone_y: Drone position
+            
+        Returns:
+            List of (x, y) for adjacent unscanned cells
+        """
+        adjacent_unscanned = []
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = drone_x + dx, drone_y + dy
+                if self.grid.in_bounds(nx, ny):
+                    cell = self.grid.get_cell(nx, ny)
+                    if cell and not cell.scanned and cell.cell_type not in (CellType.OBSTACLE, CellType.HAZARD):
+                        adjacent_unscanned.append((nx, ny))
+        return adjacent_unscanned
+
+    def _find_alternative_target(self, drone_id: str, preferred_target: Optional[Tuple[int, int]]) -> Optional[Tuple[int, int]]:
+        """
+        Find alternative unscanned target if preferred target is crowded (anti-clustering).
+        
+        Args:
+            drone_id: Current drone ID
+            preferred_target: Original target (x, y) or None
+            
+        Returns:
+            Alternative target (x, y) or None
+        """
+        if preferred_target is None:
+            return None
+        
+        drone = self.drones.get(drone_id)
+        if not drone:
+            return None
+        
+        # Count drones targeting preferred target
+        drones_targeting_preferred = 0
+        for other_id, other_drone in self.drones.items():
+            if other_id != drone_id:
+                # Rough heuristic: if other drone is heading toward same target
+                if other_drone.x == preferred_target[0] and other_drone.y == preferred_target[1]:
+                    drones_targeting_preferred += 1
+        
+        # If multiple drones are nearby/converging, suggest alternative
+        if drones_targeting_preferred >= 1:
+            all_unscanned = self.grid.get_all_unscanned_cells()
+            if len(all_unscanned) > 1:
+                # Find second nearest unscanned (excluding preferred)
+                nearest_alt = None
+                nearest_dist = float('inf')
+                for cell in all_unscanned:
+                    if cell == preferred_target:
+                        continue
+                    dist = max(abs(cell[0] - drone.x), abs(cell[1] - drone.y))
+                    if dist < nearest_dist:
+                        nearest_dist = dist
+                        nearest_alt = cell
+                return nearest_alt
+        
+        return preferred_target
+
+    def _handle_boundary(self, drone_x: int, drone_y: int) -> Optional[Tuple[int, int]]:
+        """
+        Redirect drone from boundary toward nearest unscanned region.
+        
+        Args:
+            drone_x, drone_y: Drone position
+            
+        Returns:
+            Recommended direction or None
+        """
+        # Check if drone is at or near boundary
+        margin = 2
+        at_boundary = (
+            drone_x < margin or drone_x >= self.grid.width - margin or
+            drone_y < margin or drone_y >= self.grid.height - margin
+        )
+        
+        if not at_boundary:
+            return None
+        
+        # Find unscanned cells in interior
+        unscanned = self.grid.get_all_unscanned_cells()
+        interior_unscanned = [
+            (x, y) for x, y in unscanned
+            if margin <= x < self.grid.width - margin and margin <= y < self.grid.height - margin
+        ]
+        
+        if interior_unscanned:
+            nearest = min(interior_unscanned, key=lambda c: max(abs(c[0] - drone_x), abs(c[1] - drone_y)))
+            return nearest
+        
+        return None
+
+    def get_exploration_state(self) -> dict:
+        """
+        Get comprehensive exploration state with intelligent movement recommendations.
+        
+        Implements:
+        1. Adjacent unscanned cell priority (local movement rule)
+        2. Nearest unscanned frontier detection (escape from scanned zones)
+        3. Direction calculation toward target
+        4. Anti-clustering to spread drones
+        5. Boundary handling for edge cases
+        
+        Returns:
+            Dict with unscanned cells, coverage %, and per-drone guidance including:
+            - recommended_direction: Specific direction to move
+            - target_cell: (x, y) of target unscanned cell
+            - strategy: "adjacent_exploration", "frontier_push", or "idle"
+        """
+        unscanned_cells = self.grid.get_all_unscanned_cells()
+        scanned_percentage = self.grid.get_scanned_percentage()
+        
+        drone_guidance = {}
+        
+        for drone_id, drone in self.drones.items():
+            guidance = {
+                "position": {"x": drone.x, "y": drone.y},
+                "battery": drone.battery,
+                "status": drone.status.value,
+                "total_unscanned": len(unscanned_cells),
+                "strategy": "idle",
+                "target_cell": None,
+                "recommended_direction": None,
+                "reason": "No unscanned cells available"
+            }
+            
+            # No unscanned cells left
+            if not unscanned_cells:
+                drone_guidance[drone_id] = guidance
+                continue
+            
+            # Step 1: Check for adjacent unscanned cells (local exploration)
+            adjacent_unscanned = self._get_adjacent_unscanned(drone.x, drone.y)
+            
+            if adjacent_unscanned:
+                # Prefer adjacent unscanned exploration
+                target = adjacent_unscanned[0]
+                direction = self._direction_to_target(drone.x, drone.y, target[0], target[1])
+                
+                guidance.update({
+                    "strategy": "adjacent_exploration",
+                    "target_cell": target,
+                    "recommended_direction": direction,
+                    "reason": f"Exploring adjacent unscanned cell at {target}"
+                })
+                drone_guidance[drone_id] = guidance
+                continue
+            
+            # Step 2: All adjacent cells are scanned - find frontier and escape
+            nearest_unscanned = self.grid.get_nearest_unscanned_cell(drone.x, drone.y)
+            
+            if nearest_unscanned:
+                # Apply anti-clustering: find alternative if crowded
+                target = self._find_alternative_target(drone_id, nearest_unscanned)
+                if target is None:
+                    target = nearest_unscanned
+                
+                # Check boundary condition and redirect if needed
+                boundary_redirect = self._handle_boundary(drone.x, drone.y)
+                if boundary_redirect:
+                    target = boundary_redirect
+                
+                direction = self._direction_to_target(drone.x, drone.y, target[0], target[1])
+                distance = max(abs(target[0] - drone.x), abs(target[1] - drone.y))
+                
+                guidance.update({
+                    "strategy": "frontier_push",
+                    "target_cell": target,
+                    "recommended_direction": direction,
+                    "distance_to_target": distance,
+                    "reason": f"Escaping scanned zone, pushing toward frontier at {target} ({distance} cells away)"
+                })
+            else:
+                guidance.update({
+                    "strategy": "exploration_complete",
+                    "reason": "All reachable cells have been explored"
+                })
+            
+            drone_guidance[drone_id] = guidance
+        
+        return {
+            "total_unscanned_cells": len(unscanned_cells),
+            "scanned_percentage": round(scanned_percentage, 2),
+            "drones": drone_guidance,
+            "exploration_priority": "unscanned_cells",
+            "anti_clustering": True,
+            "boundary_aware": True
         }
 
     def move_until_detect(

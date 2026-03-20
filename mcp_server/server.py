@@ -178,20 +178,30 @@ class SimulationEngine:
     
     async def get_swarm_state(self) -> Dict[str, Any]:
         """
-        Get full swarm and grid state.
+        Get full swarm and grid state with exploration guidance.
+        
+        Prioritizes identification of unscanned areas and provides recommendations
+        for efficient exploration coverage.
         
         Returns:
-            Dict with drones, grid, survivors_rescued, etc.
+            Dict with:
+                - drones: Current drone states
+                - grid: Grid state with cell information
+                - survivors_rescued: Rescue progress
+                - exploration: Unscanned cells, coverage %, and movement recommendations
         """
         async with self._lock:
             await self._ensure_initialized()
             
             state = self.swarm.get_state()
+            exploration_state = self.swarm.get_exploration_state()
+            
             state.update({
                 "mission_id": self.mission_id,
                 "state": self.state.value,
                 "move_count": self.move_count,
                 "survivors_at_base": self.swarm.survivors_at_base,
+                "exploration": exploration_state,
             })
             return state
     
@@ -974,6 +984,164 @@ async def reset_mission() -> dict:
 
 
 # ================================================================
+# EXPLORATION GUIDANCE TOOLS
+# ================================================================
+
+# Tool: Get Exploration Status
+@mcp.tool()
+async def get_exploration_status() -> dict:
+    """
+    PRIORITY: Get comprehensive exploration status including unscanned cells.
+    
+    Returns exploration state with:
+        - total_unscanned_cells: Count of cells never scanned
+        - scanned_percentage: Coverage % of entire grid
+        - drones: Per-drone exploration guidance with:
+            - nearby_unscanned_count: Unscanned cells within 5 cells
+            - nearest_unscanned: Coordinates of nearest unscanned cell
+            - all_adjacent_scanned: True if drone is trapped in fully explored zone
+            - recommendation: "move_to_unscanned" or "no_unscanned"
+    
+    Use this to:
+        1. Identify which drones are trapped in explored zones
+        2. Find nearest unscanned target for each drone
+        3. Track exploration progress (scanned %)
+        4. Determine if exploration is complete
+        
+    Returns:
+        Dict with exploration metrics and per-drone guidance
+    """
+    try:
+        state = await engine.get_swarm_state()
+        exploration = state.get("exploration", {})
+        return {
+            "success": True,
+            "total_unscanned_cells": exploration.get("total_unscanned_cells", 0),
+            "scanned_percentage": exploration.get("scanned_percentage", 0),
+            "drones": exploration.get("drones", {}),
+        }
+    except Exception as e:
+        logger.error(f"get_exploration_status failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Unscanned Zones
+@mcp.tool()
+async def get_unscanned_zones() -> dict:
+    """
+    PRIORITY: Identify all unscanned zones and clusters.
+    
+    Returns:
+        Dict with:
+        - total_unscanned: Count of unscanned cells
+        - unscanned_cells: List of [x, y] coordinates for all unscanned cells
+        - coverage_percentage: Overall grid coverage by scanning
+        
+    Use this to:
+        1. Identify unexplored regions of the map
+        2. Plan multi-drone exploration strategy
+        3. Determine exploration completion
+    """
+    try:
+        if engine.grid is None:
+            return {"success": False, "error": "Mission not initialized"}
+        
+        async with engine._lock:
+            unscanned = engine.grid.get_all_unscanned_cells()
+            scanned_pct = engine.grid.get_scanned_percentage()
+            
+            return {
+                "success": True,
+                "total_unscanned": len(unscanned),
+                "unscanned_cells": unscanned,
+                "coverage_percentage": round(scanned_pct, 2),
+            }
+    except Exception as e:
+        logger.error(f"get_unscanned_zones failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Direction to Explore
+@mcp.tool()
+async def get_direction_to_explore(drone_id: str) -> dict:
+    """
+    PRIORITY: Get optimal direction for a drone to explore unscanned areas.
+    
+    For a given drone:
+        1. Finds the nearest unscanned cell
+        2. Calculates movement direction toward it
+        3. Checks if drone is trapped (all adjacent cells scanned)
+        4. Returns recommended movement direction
+    
+    Args:
+        drone_id: Drone identifier
+        
+    Returns:
+        Dict with:
+        - success: True if guidance available
+        - nearest_unscanned: {x, y} of closest unscanned cell
+        - direction: {dx, dy} movement direction to take (-1, 0, or 1 each)
+        - distance: Approximate distance to nearest unscanned cell
+        - is_trapped: True if all adjacent cells are already scanned
+        - recommendation: "move_in_direction", "trapped_seek_escape", or "exploration_complete"
+        
+    Usage:
+        1. Call get_direction_to_explore("drone-1")
+        2. Get back {direction: {dx, dy}, nearest_unscanned: {x, y}}
+        3. Use move_drone("drone-1", dx, dy) to follow guidance
+        4. Repeat until recommendation is "exploration_complete"
+    """
+    try:
+        async with engine._lock:
+            await engine._ensure_initialized()
+            
+            if drone_id not in engine.swarm.drones:
+                return {"success": False, "error": f"Drone '{drone_id}' not found"}
+            
+            drone = engine.swarm.drones[drone_id]
+            
+            # Get nearest unscanned cell
+            nearest = engine.grid.get_nearest_unscanned_cell(drone.x, drone.y)
+            
+            if not nearest:
+                return {
+                    "success": True,
+                    "recommendation": "exploration_complete",
+                    "message": "All cells have been scanned",
+                }
+            
+            # Calculate direction to nearest unscanned
+            target_x, target_y = nearest
+            dx = 0 if target_x == drone.x else (-1 if target_x < drone.x else 1)
+            dy = 0 if target_y == drone.y else (-1 if target_y < drone.y else 1)
+            
+            # Calculate distance (Chebyshev)
+            distance = max(abs(target_x - drone.x), abs(target_y - drone.y))
+            
+            # Check if trapped in scanned zone
+            adjacent_unscanned = engine.grid.get_unscanned_cells_in_radius(drone.x, drone.y, radius=1)
+            nearby_unscanned = engine.grid.get_unscanned_cells_in_radius(drone.x, drone.y, radius=5)
+            is_trapped = len(adjacent_unscanned) == 0
+            
+            recommendation = "trapped_seek_escape" if is_trapped else "move_in_direction"
+            
+            return {
+                "success": True,
+                "drone_id": drone_id,
+                "position": {"x": drone.x, "y": drone.y},
+                "nearest_unscanned": {"x": target_x, "y": target_y},
+                "direction": {"dx": dx, "dy": dy},
+                "distance": distance,
+                "nearby_unscanned_count": len(nearby_unscanned),
+                "is_trapped": is_trapped,
+                "recommendation": recommendation,
+            }
+    except Exception as e:
+        logger.error(f"get_direction_to_explore failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ================================================================
 # Collision Avoidance Tools
 # ================================================================
 
@@ -1333,7 +1501,28 @@ async def rest_reset_mission():
     return await reset_mission()
 
 
-# Tool: Get Movement Paths (for UI visualization)
+# ================================================================
+# EXPLORATION GUIDANCE ENDPOINTS
+# ================================================================
+
+@app.get("/tools/get_exploration_status")
+async def rest_get_exploration_status():
+    """Get exploration status via REST."""
+    return await get_exploration_status()
+
+
+@app.get("/tools/get_unscanned_zones")
+async def rest_get_unscanned_zones():
+    """Get unscanned zones via REST."""
+    return await get_unscanned_zones()
+
+
+@app.post("/tools/get_direction_to_explore")
+async def rest_get_direction_to_explore(drone_id: str):
+    """Get direction to explore via REST."""
+    return await get_direction_to_explore(drone_id)
+
+
 @mcp.tool()
 async def get_movement_paths() -> dict:
     """

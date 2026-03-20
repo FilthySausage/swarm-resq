@@ -558,6 +558,7 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
         "X": 1,   # Hazard - red warning
         "S": 2,   # Survivor - orange target
         "#": 3,   # Obstacle - dark
+        "scanned": 4,  # Scanned/Visited - unified color
     }
 
     # Map cell types to readable names for hover text
@@ -566,6 +567,7 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
         "#": "Obstacle",
         "S": "Survivor",
         "X": "Hazard",
+        "scanned": "Scanned/Visited",
     }
 
     # Fill the grid
@@ -574,8 +576,20 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
             cx = cell.get("x", 0)
             cy = cell.get("y", 0)
             cell_type = cell.get("type", ".")
-            grid_visual[cy][cx] = cell_color_map.get(cell_type, 0)
-            grid_labels[cy][cx] = f"({cx}, {cy})<br>{cell_name_map.get(cell_type, 'Unknown')}"
+            is_scanned = cell.get("scanned", False)
+            
+            # Keep original colors for hazard, obstacle, and survivor
+            # Only mark empty cells as scanned
+            if is_scanned and cell_type == ".":
+                grid_visual[cy][cx] = cell_color_map["scanned"]
+                grid_labels[cy][cx] = f"({cx}, {cy})<br>Scanned/Visited"
+            else:
+                grid_visual[cy][cx] = cell_color_map.get(cell_type, 0)
+                cell_label = cell_name_map.get(cell_type, "Unknown")
+                if is_scanned:
+                    grid_labels[cy][cx] = f"({cx}, {cy})<br>{cell_label}<br>(Scanned)"
+                else:
+                    grid_labels[cy][cx] = f"({cx}, {cy})<br>{cell_label}"
     
     # Create figure with custom colorscale
     fig = go.Figure()
@@ -584,17 +598,18 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
     fig.add_trace(go.Heatmap(
         z=grid_visual,
         zmin=0,
-        zmax=3,
+        zmax=4,
         colorscale=[
             [0.0, "#FFFFFF"],   # Empty - white
-            [0.333, st.session_state.get("color_hazard", "#FF4444")],  # Hazard
-            [0.666, st.session_state.get("color_survivor", "#FF00FF")],   # Survivor
-            [1.0, st.session_state.get("color_obstacle", "#00AA00")],  # Obstacle
+            [0.2, st.session_state.get("color_hazard", "#FF4444")],  # Hazard
+            [0.4, st.session_state.get("color_survivor", "#FF00FF")],   # Survivor
+            [0.6, st.session_state.get("color_obstacle", "#00AA00")],  # Obstacle
+            [1.0, "#87CEEB"],   # Scanned/Visited - sky blue
         ],
         colorbar=dict(
             title="Cell Type",
-            tickvals=[0, 1, 2, 3],
-            ticktext=["Empty", "Hazard", "Survivor", "Obstacle"],
+            tickvals=[0, 1, 2, 3, 4],
+            ticktext=["Empty", "Hazard", "Survivor", "Obstacle", "Scanned/Visited"],
             len=0.5,
         ),
         showscale=True,
