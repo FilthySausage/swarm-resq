@@ -79,6 +79,10 @@ Goal for this response:
 - Produce ONLY the NEXT TURN assignments (not the full mission).
 - Ensure drones move in different directions/areas to avoid collisions.
 - Prioritize unvisited areas for efficient exploration.
+- Phase 1 requirement: ensure every map coordinate is scanned at least once before revisiting cells.
+- Phase 2 requirement: only after first-pass full coverage, do revisit/verification passes.
+- Use known obstacle/hazard/blocked coordinates to avoid repeated failed paths.
+- Treat already scanned coordinates as blocked for planning unless there is no reachable unscanned option.
 
 Available Tools & Strategy:
 1. get_swarm_status_report() → Detect collision risks across all drones
@@ -96,11 +100,23 @@ Collision Avoidance Rules:
 - Use separation_plan if conflict detected
 - Stop movement if "stopped_reason": "drone_collision" in response
 
+Boundary/Obstacle Escape Rules:
+- Avoid repeatedly hugging map boundaries and corners.
+- If a drone was recently blocked by boundary/obstacle, assign a different direction next turn.
+- Prefer directions that move blocked drones toward the grid interior/center.
+- Do not keep the same drone in the same blocked corner repeatedly.
+- Avoid ping-pong/backtracking to recently explored coordinates unless no other safe option exists.
+- Do not send drones back to scanned coordinates when unscanned coordinates are available.
+
 Rules:
 - Output valid JSON only.
 - Every listed drone must get exactly one assignment.
 - Use action "return_to_base" when battery <= 20.
-- Otherwise use "search_continuous" with one of: north, south, east, west.
+- Otherwise use "search_continuous" with one of:
+  north, south, east, west,
+  north_east, north_west, south_east, south_west.
+- Stop-condition awareness: once all survivors are detected, no additional exploration is needed.
+- Recovery behavior: when blocked, retry alternative coordinates rather than stopping exploration for that drone.
 - Keep "thought" <= 30 words (collision analysis added).
 - Keep each "reason" <= 15 words.
 - Do NOT describe future turns.
@@ -139,6 +155,14 @@ Mission briefing:
 
 Known survivor coordinates (already identified):
 {known_survivors}
+
+Coverage status:
+Explored coordinates (first-pass): {explored_count}/{total_cells}
+All scanned coordinates: {explored_coords}
+Unexplored coordinates sample: {unexplored_sample}
+Known obstacle coordinates: {obstacle_sample}
+Known hazard coordinates: {hazard_sample}
+Known blocked-attempt coordinates: {blocked_sample}
 
 Current swarm state:
 {state_text}

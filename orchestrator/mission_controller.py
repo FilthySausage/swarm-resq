@@ -52,6 +52,11 @@ class MissionController:
 
         self.discovered_survivors: list[dict[str, int]] = []
         self.total_survivors_target: Optional[int] = None
+        self.explored_cells: set[tuple[int, int]] = set()
+        self.total_cells: int = 0
+        self.obstacle_cells: set[tuple[int, int]] = set()
+        self.hazard_cells: set[tuple[int, int]] = set()
+        self.blocked_cells: set[tuple[int, int]] = set()
 
     def _build_model_candidates(self, primary_config: Dict[str, Any]) -> list[Dict[str, Any]]:
         # Future-proofing: could append fallback models here. Just use primary for now.
@@ -112,6 +117,48 @@ class MissionController:
             f"Base: (0, 0)\n\n"
             f"Drones:\n{chr(10).join(drone_lines)}"
         )
+
+    def _mark_scanned_area(self, x: int, y: int, width: int, height: int, radius: int = 2) -> None:
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if abs(dx) + abs(dy) > radius:
+                    continue
+                cx = x + dx
+                cy = y + dy
+                if 0 <= cx < width and 0 <= cy < height:
+                    self.explored_cells.add((cx, cy))
+
+    def _update_explored_from_state(self, state: Dict[str, Any]) -> None:
+        grid = state.get("grid", {})
+        width = int(grid.get("width", 0))
+        height = int(grid.get("height", 0))
+        if width <= 0 or height <= 0:
+            return
+        self.total_cells = width * height
+        for drone in state.get("drones", []):
+            x = int(drone.get("x", 0))
+            y = int(drone.get("y", 0))
+            self._mark_scanned_area(x, y, width, height, radius=2)
+
+    def _update_explored_from_events(self, step_events: list[dict[str, Any]], state: Dict[str, Any]) -> None:
+        grid = state.get("grid", {})
+        width = int(grid.get("width", 0))
+        height = int(grid.get("height", 0))
+        if width <= 0 or height <= 0:
+            return
+        self.total_cells = width * height
+        for event in step_events:
+            event_type = str(event.get("type", ""))
+            if event_type == "movement_step":
+                x = int(event.get("x", 0))
+                y = int(event.get("y", 0))
+                self._mark_scanned_area(x, y, width, height, radius=2)
+            elif event_type == "obstacle_detected":
+                self.obstacle_cells.add((int(event.get("x", -1)), int(event.get("y", -1))))
+            elif event_type == "hazard_detected":
+                self.hazard_cells.add((int(event.get("x", -1)), int(event.get("y", -1))))
+            elif event_type == "blocked_attempt":
+                self.blocked_cells.add((int(event.get("x", -1)), int(event.get("y", -1))))
 
     def build_fallback_turn_plan_json(self, state: Dict[str, Any], reason: str = "fallback") -> str:
         """Build a deterministic, minimal per-turn plan when AI output is unavailable/invalid."""
@@ -177,11 +224,34 @@ class MissionController:
             raise
 
     async def request_turn_plan(self, state: Dict[str, Any], briefing: str = "") -> Optional[str]:
+        self._update_explored_from_state(state)
         state_text = self.format_state_for_ai(state)
+        grid = state.get("grid", {})
+        width = int(grid.get("width", 0))
+        height = int(grid.get("height", 0))
+        total_cells = width * height if width > 0 and height > 0 else self.total_cells
+        unexplored = [
+            (x, y)
+            for y in range(height)
+            for x in range(width)
+            if (x, y) not in self.explored_cells
+        ] if width > 0 and height > 0 else []
+        explored_coords = sorted(self.explored_cells)
+        unexplored_sample = unexplored[:12]
+        obstacle_sample = sorted(self.obstacle_cells)[:20]
+        hazard_sample = sorted(self.hazard_cells)[:20]
+        blocked_sample = sorted(self.blocked_cells)[:20]
         turn_message = TURN_DECISION_USER_TEMPLATE.format(
             turn_no=self.turn_count,
             briefing=briefing or "Systematic survivor coordinate discovery",
             known_survivors=self.discovered_survivors,
+            explored_count=len(self.explored_cells),
+            total_cells=total_cells,
+            explored_coords=explored_coords,
+            unexplored_sample=unexplored_sample,
+            obstacle_sample=obstacle_sample,
+            hazard_sample=hazard_sample,
+            blocked_sample=blocked_sample,
             state_text=state_text,
         )
 
@@ -262,28 +332,24 @@ class MissionController:
 
             turn_plan_json = await self.request_turn_plan(state, briefing)
             if not turn_plan_json:
-                yield "WARN: AI plan unavailable; using fallback turn plan.\n"
+                yield "WARN: AI plan unavailable; skipping this turn (fallback disabled).\n"
                 if self.last_turn_error:
                     yield f"DEBUG AI ERROR: {self.last_turn_error}\n"
                 yield f"DEBUG STATE: drones={len(state.get('drones', []))}, survivors={len(state.get('survivors', []))}\n"
-                turn_plan_json = self.build_fallback_turn_plan_json(state, reason="empty-ai-response")
+                await asyncio.sleep(self.turn_delay_seconds)
+                continue
 
             yield "AI decision received for this turn. Executing movements...\n"
 
             execution = await self._execute_plan_json(turn_plan_json)
             if not execution.get("success"):
-                yield "WARN: AI plan invalid/execution failed; retrying with fallback plan.\n"
+                yield "WARN: AI plan invalid/execution failed; skipping this turn (fallback disabled).\n"
                 if execution.get("error"):
                     yield f"DEBUG EXECUTION ERROR: {execution.get('error')}\n"
-                fallback_plan_json = self.build_fallback_turn_plan_json(state, reason="invalid-ai-plan")
-                execution = await self._execute_plan_json(fallback_plan_json)
-                if not execution.get("success"):
-                    yield "ERROR: Fallback plan execution failed\n"
-                    if execution.get("error"):
-                        yield f"DEBUG FALLBACK ERROR: {execution.get('error')}\n"
-                    for line in execution.get("execution_log", []):
-                        yield line + "\n"
-                    return
+                await asyncio.sleep(self.turn_delay_seconds)
+                continue
+
+            self._update_explored_from_events(execution.get("step_events", []), state)
 
             for line in execution.get("execution_log", []):
                 yield line + "\n"

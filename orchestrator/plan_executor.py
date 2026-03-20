@@ -32,6 +32,10 @@ class Direction(str, Enum):
     SOUTH = "south"
     EAST = "east"
     WEST = "west"
+    NORTH_EAST = "north_east"
+    NORTH_WEST = "north_west"
+    SOUTH_EAST = "south_east"
+    SOUTH_WEST = "south_west"
 
 
 class DroneAssignment(BaseModel):
@@ -116,6 +120,9 @@ class PlanExecutor:
             
             # Parse JSON
             data = json.loads(json_str)
+
+            # Normalize imperfect AI payloads into the expected schema.
+            data = self._normalize_plan_payload(data)
             
             # Validate with Pydantic
             plan = MissionPlan(**data)
@@ -132,6 +139,118 @@ class PlanExecutor:
         except Exception as e:
             self.log(f"[FAIL] Plan validation error: {e}")
             return None
+
+    def _normalize_direction(self, direction: Optional[str]) -> Optional[str]:
+        if direction is None:
+            return None
+        d = str(direction).strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "n": "north",
+            "s": "south",
+            "e": "east",
+            "w": "west",
+            "ne": "north_east",
+            "nw": "north_west",
+            "se": "south_east",
+            "sw": "south_west",
+            "northeast": "north_east",
+            "northwest": "north_west",
+            "southeast": "south_east",
+            "southwest": "south_west",
+            "up": "north",
+            "down": "south",
+            "left": "west",
+            "right": "east",
+        }
+        d = aliases.get(d, d)
+        valid = {
+            "north", "south", "east", "west",
+            "north_east", "north_west", "south_east", "south_west",
+        }
+        return d if d in valid else None
+
+    def _normalize_action(self, action: Optional[str], battery: Optional[int] = None) -> str:
+        a = str(action or "").strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "search": "search_continuous",
+            "scan": "search_continuous",
+            "explore": "search_continuous",
+            "move": "search_continuous",
+            "continue_search": "search_continuous",
+            "return": "return_to_base",
+            "return_base": "return_to_base",
+            "back_to_base": "return_to_base",
+            "wait": "idle",
+        }
+        a = aliases.get(a, a)
+        if a not in {"search_continuous", "return_to_base", "idle"}:
+            # Conservative default: keep searching unless very low battery context exists.
+            if battery is not None and int(battery) <= 20:
+                return "return_to_base"
+            return "search_continuous"
+        return a
+
+    def _normalize_plan_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ValueError("Plan root must be a JSON object")
+
+        assignments = data.get("drone_assignments")
+        if not isinstance(assignments, list):
+            raise ValueError("drone_assignments must be a list")
+
+        normalized_assignments: List[Dict[str, Any]] = []
+        low_battery_drones: List[str] = []
+        active_search_drones: List[str] = []
+
+        for idx, raw in enumerate(assignments):
+            if not isinstance(raw, dict):
+                continue
+
+            drone_id = str(raw.get("drone_id", f"drone-{idx+1}")).strip()
+            action = self._normalize_action(raw.get("action"))
+            direction = self._normalize_direction(raw.get("direction"))
+
+            if action == "search_continuous" and direction is None:
+                direction = "north"
+            if action != "search_continuous":
+                direction = None
+
+            reason = str(raw.get("reason", "Auto-normalized assignment")).strip() or "Auto-normalized assignment"
+
+            if action == "return_to_base":
+                low_battery_drones.append(drone_id)
+            elif action == "search_continuous":
+                active_search_drones.append(drone_id)
+
+            normalized_assignments.append(
+                {
+                    "drone_id": drone_id,
+                    "action": action,
+                    "direction": direction,
+                    "reason": reason[:120],
+                }
+            )
+
+        if not normalized_assignments:
+            raise ValueError("No valid drone assignments found")
+
+        thought = str(data.get("thought", "Execute immediate safe exploration assignments.")).strip()
+        strategy = str(data.get("search_strategy", "turn_step")).strip() or "turn_step"
+
+        battery_management = data.get("battery_management")
+        if not isinstance(battery_management, dict):
+            battery_management = {}
+
+        return {
+            "thought": thought,
+            "search_strategy": strategy,
+            "drone_assignments": normalized_assignments,
+            "battery_management": {
+                "low_battery_drones": battery_management.get("low_battery_drones", low_battery_drones),
+                "active_search_drones": battery_management.get("active_search_drones", active_search_drones),
+                "recall_threshold": int(battery_management.get("recall_threshold", 20)),
+            },
+        }
     
     def log(self, message: str):
         """Add message to execution log"""
@@ -145,11 +264,23 @@ class PlanExecutor:
             Direction.SOUTH: (0, -1),
             Direction.EAST: (1, 0),
             Direction.WEST: (-1, 0),
+            Direction.NORTH_EAST: (1, 1),
+            Direction.NORTH_WEST: (-1, 1),
+            Direction.SOUTH_EAST: (1, -1),
+            Direction.SOUTH_WEST: (-1, -1),
         }
         return mapping[direction]
 
     def alternate_directions(self, direction: Direction) -> List[Direction]:
         """Return preferred fallback directions when movement is blocked."""
+        if direction == Direction.NORTH_EAST:
+            return [Direction.NORTH, Direction.EAST, Direction.NORTH_WEST, Direction.SOUTH_EAST, Direction.WEST, Direction.SOUTH]
+        if direction == Direction.NORTH_WEST:
+            return [Direction.NORTH, Direction.WEST, Direction.NORTH_EAST, Direction.SOUTH_WEST, Direction.EAST, Direction.SOUTH]
+        if direction == Direction.SOUTH_EAST:
+            return [Direction.SOUTH, Direction.EAST, Direction.NORTH_EAST, Direction.SOUTH_WEST, Direction.WEST, Direction.NORTH]
+        if direction == Direction.SOUTH_WEST:
+            return [Direction.SOUTH, Direction.WEST, Direction.NORTH_WEST, Direction.SOUTH_EAST, Direction.EAST, Direction.NORTH]
         if direction == Direction.NORTH:
             return [Direction.EAST, Direction.WEST, Direction.SOUTH]
         if direction == Direction.SOUTH:
@@ -157,6 +288,39 @@ class PlanExecutor:
         if direction == Direction.EAST:
             return [Direction.NORTH, Direction.SOUTH, Direction.WEST]
         return [Direction.SOUTH, Direction.NORTH, Direction.EAST]
+
+    def _towards_center_priority(
+        self,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        preferred: Direction,
+    ) -> List[Direction]:
+        """Build direction preference that gently pulls drones toward map center."""
+        center_x = width // 2
+        center_y = height // 2
+
+        primary: List[Direction] = []
+        if x < center_x:
+            primary.append(Direction.EAST)
+        elif x > center_x:
+            primary.append(Direction.WEST)
+
+        if y < center_y:
+            primary.append(Direction.NORTH)
+        elif y > center_y:
+            primary.append(Direction.SOUTH)
+
+        ordered = [preferred] + primary + self.alternate_directions(preferred)
+        deduped: List[Direction] = []
+        for d in ordered:
+            if d not in deduped:
+                deduped.append(d)
+        return deduped
+
+    def _is_near_boundary(self, x: int, y: int, width: int, height: int, margin: int = 1) -> bool:
+        return x <= margin or y <= margin or x >= (width - 1 - margin) or y >= (height - 1 - margin)
     
     async def call_mcp_tool(self, tool_name: str, **params) -> dict:
         """Call MCP server tool"""
@@ -198,8 +362,38 @@ class PlanExecutor:
         total_moves = 0
         current_direction = direction
         stopped_reason = "max_steps"
+        reroute_attempts = 0
+        max_reroute_attempts = 6
+
+        drone_state = await self.call_mcp_tool("get_drone_state", drone_id=drone_id)
+        drone_now = drone_state.get("drone", {}) if drone_state.get("success") else {}
+        current_x = int(drone_now.get("x", 0))
+        current_y = int(drone_now.get("y", 0))
+
+        width = 20
+        height = 20
+        swarm_state = await self.call_mcp_tool("get_swarm_state")
+        if swarm_state.get("success"):
+            grid = swarm_state.get("grid", {})
+            width = int(grid.get("width", width))
+            height = int(grid.get("height", height))
+
         for _ in range(max_steps):
+            if path:
+                last_pos = path[-1]
+                if self._is_near_boundary(last_pos["x"], last_pos["y"], width, height, margin=1):
+                    center_pref = self._towards_center_priority(
+                        last_pos["x"],
+                        last_pos["y"],
+                        width,
+                        height,
+                        current_direction,
+                    )
+                    current_direction = center_pref[0]
+
             dx, dy = self.direction_to_delta(current_direction)
+            attempted_x = current_x + dx
+            attempted_y = current_y + dy
             move_result = await self.call_mcp_tool(
                 "move_drone",
                 drone_id=drone_id,
@@ -209,7 +403,15 @@ class PlanExecutor:
 
             if not move_result.get("success"):
                 fallback_applied = False
-                for alt in self.alternate_directions(current_direction):
+                current_pos = path[-1] if path else {"x": width // 2, "y": height // 2}
+                fallback_dirs = self._towards_center_priority(
+                    int(current_pos.get("x", width // 2)),
+                    int(current_pos.get("y", height // 2)),
+                    width,
+                    height,
+                    current_direction,
+                )
+                for alt in fallback_dirs:
                     alt_dx, alt_dy = self.direction_to_delta(alt)
                     alt_result = await self.call_mcp_tool(
                         "move_drone",
@@ -221,9 +423,32 @@ class PlanExecutor:
                         move_result = alt_result
                         current_direction = alt
                         fallback_applied = True
+                        reroute_attempts = 0
                         break
 
                 if not fallback_applied:
+                    reroute_attempts += 1
+                    # Try to recover from corner/obstacle traps by selecting a new preferred heading.
+                    drone_state = await self.call_mcp_tool("get_drone_state", drone_id=drone_id)
+                    drone_now = drone_state.get("drone", {}) if drone_state.get("success") else {}
+                    cx = int(drone_now.get("x", current_pos.get("x", width // 2)))
+                    cy = int(drone_now.get("y", current_pos.get("y", height // 2)))
+                    center_pref = self._towards_center_priority(cx, cy, width, height, current_direction)
+                    current_direction = center_pref[min(reroute_attempts, len(center_pref) - 1)]
+
+                    if reroute_attempts <= max_reroute_attempts:
+                        step_events.append(
+                            {
+                                "type": "blocked_attempt",
+                                "drone_id": drone_id,
+                                "direction": current_direction.value,
+                                "x": int(attempted_x),
+                                "y": int(attempted_y),
+                                "error": str(move_result.get("error", "blocked")),
+                            }
+                        )
+                        continue
+
                     error_text = str(move_result.get("error", ""))
                     if "bounds" in error_text.lower():
                         stopped_reason = "boundary"
@@ -240,6 +465,8 @@ class PlanExecutor:
                 "y": int(drone.get("y", 0)),
                 "step": total_moves,
             }
+            current_x = step_pos["x"]
+            current_y = step_pos["y"]
             path.append(step_pos)
 
             step_events.append(
@@ -266,6 +493,24 @@ class PlanExecutor:
             new_survivors: List[Dict[str, int]] = []
             for detection in detections:
                 if detection.get("type") != "S":
+                    if detection.get("type") == "#":
+                        step_events.append(
+                            {
+                                "type": "obstacle_detected",
+                                "drone_id": drone_id,
+                                "x": int(detection.get("x", -1)),
+                                "y": int(detection.get("y", -1)),
+                            }
+                        )
+                    elif detection.get("type") == "X":
+                        step_events.append(
+                            {
+                                "type": "hazard_detected",
+                                "drone_id": drone_id,
+                                "x": int(detection.get("x", -1)),
+                                "y": int(detection.get("y", -1)),
+                            }
+                        )
                     continue
                 key = (int(detection.get("x", -1)), int(detection.get("y", -1)))
                 if key in self._known_survivor_set:

@@ -67,7 +67,9 @@ class DroneSwarm:
         cell = self.grid.get_cell(x, y)
         if cell:
             cell.drone_id = drone_id
-            cell.cell_type = CellType.DRONE
+            # Preserve survivor marker if present so survivor coordinates remain visible.
+            if cell.cell_type != CellType.SURVIVOR:
+                cell.cell_type = CellType.DRONE
 
     def add_drone(self, drone_id: str, x: int, y: int) -> Drone:
         if not self.grid.in_bounds(x, y):

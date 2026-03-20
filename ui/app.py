@@ -20,6 +20,7 @@ import numpy as np
 import json
 import os
 import sys
+import re
 import httpx
 from pathlib import Path
 
@@ -98,6 +99,23 @@ def call_mcp_tool_sync(tool_name: str, **params) -> dict:
     """Synchronous wrapper for MCP tool calls."""
     return asyncio.run(call_mcp_tool(tool_name, **params))
 
+
+def get_installed_ollama_models(base_url: str = "http://localhost:11434/v1") -> list[str]:
+    """Return locally installed Ollama model names, or empty list if unavailable."""
+    try:
+        ollama_host = base_url.rstrip("/")
+        if ollama_host.endswith("/v1"):
+            ollama_host = ollama_host[:-3]
+        tags_url = f"{ollama_host}/api/tags"
+        response = httpx.get(tags_url, timeout=3.0)
+        response.raise_for_status()
+        payload = response.json() or {}
+        models = payload.get("models", [])
+        names = [m.get("name", "").strip() for m in models if m.get("name")]
+        return sorted(set(names))
+    except Exception:
+        return []
+
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
@@ -117,18 +135,66 @@ st.caption("Real-time rescue drone swarm visualization & mission control")
 @st.dialog("Add Custom Model")
 def add_custom_model_dialog():
     st.write("Register a new local or custom model.")
-    provider = st.text_input("Provider", value="Ollama")
-    model_id = st.text_input("Model ID", value="qwen2.5:3b")
-    base_url = st.text_input("Base URL", value="http://localhost:11434/v1")
-    
-    if st.button("Save", type="primary"):
-        new_model_name = f"{provider} {model_id} (Custom)"
+
+    provider_base_urls = {
+        "Ollama": "http://localhost:11434/v1",
+        "OpenRouter": "https://openrouter.ai/api/v1",
+        "OpenAI": "https://api.openai.com/v1",
+    }
+    provider_requires_key = {
+        "Ollama": False,
+        "OpenRouter": True,
+        "OpenAI": True,
+    }
+
+    provider = st.selectbox(
+        "Provider",
+        options=["Ollama", "OpenRouter", "OpenAI"],
+        index=0,
+        help="Select one of the supported providers.",
+    )
+    model_name = st.text_input("Model Name", value="My Custom Model")
+
+    base_url = provider_base_urls[provider]
+    requires_key = provider_requires_key[provider]
+    save_disabled = False
+
+    if provider == "Ollama":
+        ollama_models = get_installed_ollama_models(base_url)
+        if ollama_models:
+            model_id = st.selectbox(
+                "Model ID (Installed in Ollama)",
+                options=ollama_models,
+                help="Only installed Ollama models are allowed.",
+            )
+        else:
+            model_id = ""
+            save_disabled = True
+            st.warning(
+                "No installed Ollama models detected. Pull a model first (e.g., 'ollama pull qwen2.5:3b') or choose OpenRouter/OpenAI.",
+                icon="⚠️",
+            )
+    else:
+        model_id = st.text_input("Model ID", value="")
+
+    st.text_input("Base URL (Auto)", value=base_url, disabled=True)
+    st.checkbox("Requires API Key", value=requires_key, disabled=True)
+
+    if st.button("Save", type="primary", disabled=save_disabled):
+        if not model_name.strip():
+            st.error("Model Name is required.")
+            return
+        if not model_id.strip():
+            st.error("Model ID is required.")
+            return
+
+        new_model_name = model_name.strip()
         new_model = {
             "name": new_model_name,
             "provider": provider,
-            "model_id": model_id,
+            "model_id": model_id.strip(),
             "base_url": base_url,
-            "requires_key": False,
+            "requires_key": requires_key,
             "description": "Custom user-added model"
         }
         success = add_custom_model(new_model)
@@ -151,6 +217,8 @@ if "environment_initialized" not in st.session_state:
     st.session_state.environment_initialized = False
 if "last_state" not in st.session_state:
     st.session_state.last_state = None
+if "use_snapshot_state" not in st.session_state:
+    st.session_state.use_snapshot_state = False
 if "drone_paths" not in st.session_state:
     st.session_state.drone_paths = {}  # Track movement paths for visualization
 if "show_paths" not in st.session_state:
@@ -159,12 +227,20 @@ if "selected_model" not in st.session_state:
     st.session_state.selected_model = get_default_model()["name"]  # Default AI model
 if "identified_survivors" not in st.session_state:
     st.session_state.identified_survivors = []
+if "identified_survivor_set" not in st.session_state:
+    st.session_state.identified_survivor_set = set()
 if "init_error" not in st.session_state:
     st.session_state.init_error = ""
 if "init_status" not in st.session_state:
     st.session_state.init_status = ""
 if "last_init_result" not in st.session_state:
     st.session_state.last_init_result = None
+if "step_logs" not in st.session_state:
+    st.session_state.step_logs = []
+if "last_live_render_ts" not in st.session_state:
+    st.session_state.last_live_render_ts = 0.0
+if "live_plot_seq" not in st.session_state:
+    st.session_state.live_plot_seq = 0
 
 # ---------------------------------------------------------------------------
 # Sidebar controls
@@ -199,13 +275,20 @@ with st.sidebar:
             st.caption(f"**Base URL:** {selected_model_config['base_url']}")
             st.caption(f"**Description:** {selected_model_config['description']}")
 
-        if selected_model_config.get("requires_key") and not os.getenv("OPENROUTER_API_KEY", "").strip():
-            st.warning(
-                "This model needs OPENROUTER_API_KEY. Add it to .env or switch to an Ollama (Local) model.",
-                icon="⚠️",
-            )
+        provider_name = str(selected_model_config.get("provider", "")).lower()
+        if selected_model_config.get("requires_key"):
+            if provider_name == "openai" and not os.getenv("OPENAI_API_KEY", "").strip():
+                st.warning(
+                    "This model needs OPENAI_API_KEY. Add it to .env or switch to an Ollama (Local) model.",
+                    icon="⚠️",
+                )
+            elif provider_name == "openrouter" and not os.getenv("OPENROUTER_API_KEY", "").strip():
+                st.warning(
+                    "This model needs OPENROUTER_API_KEY. Add it to .env or switch to an Ollama (Local) model.",
+                    icon="⚠️",
+                )
 
-        if str(selected_model_config.get("provider", "")).lower() == "ollama":
+        if provider_name == "ollama":
             st.info(
                 "Using local Ollama backend. Ensure Ollama is running and model is pulled (e.g., `ollama run llama2`).",
                 icon="🖥️",
@@ -215,20 +298,24 @@ with st.sidebar:
     
     # Environment initialization
     st.subheader("🌍 Environment Setup")
+    env_locked = st.session_state.environment_initialized
+    if env_locked:
+        st.caption("Environment is locked after initialization. Restart app to create a new map.")
     col_init1, col_init2 = st.columns(2)
     with col_init1:
-        grid_width = st.number_input("Grid Width", 10, 50, 20)
+        grid_width = st.number_input("Grid Width", 10, 50, 20, disabled=env_locked)
     with col_init2:
-        grid_height = st.number_input("Grid Height", 10, 50, 20)
+        grid_height = st.number_input("Grid Height", 10, 50, 20, disabled=env_locked)
     
     col_init3, col_init4 = st.columns(2)
     with col_init3:
-        drone_count = st.number_input("Number of Drones", 1, 10, 3)
+        drone_count = st.number_input("Number of Drones", 1, 10, 3, disabled=env_locked)
     with col_init4:
-        survivor_count = st.number_input("Number of Survivors", 1, 20, 5)
+        survivor_count = st.number_input("Number of Survivors", 1, 20, 5, disabled=env_locked)
     
     init_btn = st.button(
         "🔧 Initialize Environment",
+        disabled=env_locked,
         width='stretch',
     )
     
@@ -249,7 +336,11 @@ with st.sidebar:
             st.session_state.mission_complete = False
             st.session_state.drone_paths = {}
             st.session_state.mission_log = ""
+            st.session_state.step_logs = []
+            st.session_state.live_plot_seq = 0
+            st.session_state.use_snapshot_state = False
             st.session_state.identified_survivors = []
+            st.session_state.identified_survivor_set = set()
             st.session_state.init_error = ""
             st.session_state.init_status = f"Environment initialized via {ACTIVE_MCP_SERVER_URL}"
             st.success("✅ Environment initialized!")
@@ -332,8 +423,8 @@ with st.sidebar:
 # Main layout
 # ---------------------------------------------------------------------------
 
-# Top row: Grid + Status
-col_grid, col_metrics = st.columns([2, 1])
+# Top row: Grid + Step Log + Status
+col_grid, col_step_log, col_metrics = st.columns([2, 1.2, 1])
 
 # Bottom row: Mission Log
 col_log = st.container()
@@ -704,6 +795,108 @@ def render_mission_summary(state: dict) -> str:
     """
 
 
+def _step_log_to_row(index: int, text: str) -> dict:
+    """Convert one step-log string to a compact table row."""
+    msg = (text or "").strip()
+    low = msg.lower()
+    log_type = "AI"
+    if "moved to" in low or low.startswith("movement result"):
+        log_type = "MOVE"
+    elif "survivor" in low and ("detected" in low or "discovered" in low):
+        log_type = "DETECT"
+    elif low.startswith("system event"):
+        log_type = "EVENT"
+    elif low.startswith("turn "):
+        log_type = "TURN"
+    elif low.startswith("selected strategy"):
+        log_type = "STRATEGY"
+    return {"Step": index, "Type": log_type, "Message": msg}
+
+
+def render_step_log_panel(container, max_items: int = 80) -> None:
+    """Render persistent AI step log in a compact table format."""
+    with container.container():
+        if not st.session_state.environment_initialized:
+            return
+        st.subheader("🧠 AI Step Log")
+        logs = st.session_state.get("step_logs", [])
+        if logs:
+            tail = logs[-max_items:]
+            rows = [_step_log_to_row(i + 1, msg) for i, msg in enumerate(tail)]
+            st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+        else:
+            st.caption("No step logs yet. Launch mission to see AI thought + decisions.")
+
+
+def append_step_log(message: str) -> None:
+    """Append step log message while avoiding immediate duplicates."""
+    text = (message or "").strip()
+    if not text:
+        return
+    logs = st.session_state.step_logs
+    if not logs or logs[-1] != text:
+        logs.append(text)
+
+
+def interpret_mission_line(line: str) -> Optional[str]:
+    """Convert raw mission output lines into plain-English step summaries."""
+    text = (line or "").strip()
+    if not text:
+        return None
+
+    upper = text.upper()
+    if text.startswith("="):
+        return None
+    if upper.startswith("TURN "):
+        return f"{text.title()} started."
+    if upper == "EXECUTING MISSION PLAN":
+        return "The AI started executing the mission plan."
+    if upper == "EXECUTION COMPLETE":
+        return "The AI completed this execution cycle."
+    if upper.startswith("AI DECISION RECEIVED"):
+        return "The AI finalized a plan for this turn and started execution."
+    if text.startswith("[OK] Plan parsed successfully:"):
+        strategy = text.split(":", 1)[1].strip().replace(" strategy", "")
+        return f"Plan validation succeeded using strategy: {strategy}."
+    if text.startswith("Thought:"):
+        thought = text.split(":", 1)[1].strip()
+        return f"AI thought: {thought}"
+    if text.startswith("Strategy:"):
+        return f"Selected strategy: {text.split(':', 1)[1].strip()}."
+    if text.startswith("Assignments:"):
+        return f"The AI created {text.split(':', 1)[1].strip()} assignments."
+    if text.startswith("[drone-") and text.endswith("]"):
+        return f"Now assigning tasks for {text[1:-1]}."
+    if text.startswith("Action:"):
+        action = text.split(":", 1)[1].strip().replace("_", " ")
+        return f"Assigned action: {action}."
+    if text.startswith("Reason:"):
+        return f"Reason: {text.split(':', 1)[1].strip()}."
+    if text.startswith("->") and "Searching" in text:
+        return text.replace("->", "").strip().replace(" (continuous)", ".")
+    if "[SURVIVOR] DETECTED at" in text:
+        coords = text.split("at", 1)[1].strip()
+        return f"A survivor was detected at {coords}."
+    if text.startswith("[OK] moved"):
+        moved = re.search(r"moved\s+(\d+)\s+steps", text)
+        stopped = re.search(r"stopped by\s+([a-zA-Z_]+)", text)
+        battery = re.search(r"battery:\s*(\d+)%", text)
+        moved_steps = moved.group(1) if moved else "?"
+        stop_reason = stopped.group(1).replace("_", " ") if stopped else "unknown reason"
+        battery_pct = battery.group(1) if battery else "?"
+        return f"Movement result: {moved_steps} steps, stopped by {stop_reason}, battery now {battery_pct}%."
+    if text.startswith("Survivors discovered:"):
+        return f"Summary: {text.lower()}."
+    if re.match(r"^\d+\.\s*\(\d+\s*,\s*\d+\)", text):
+        return f"Discovered survivor location {text}."
+
+    keep_keywords = ["THOUGHT", "DECISION", "ACTION", "PLAN", "OBSERVATION"]
+    if any(k in upper for k in keep_keywords):
+        return f"AI update: {text}"
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Agent streaming function using Langchain + MCP
 # ---------------------------------------------------------------------------
@@ -777,17 +970,15 @@ async def run_stream_agent(briefing: str, model_name: str = None):
     log_placeholder = st.empty()
     with col_grid:
         live_grid_placeholder = st.empty()
+    with col_step_log:
+        live_step_log_placeholder = st.empty()
     with col_metrics:
-        live_summary_placeholder = st.empty()
-        live_drone_table_placeholder = st.empty()
-        live_survivor_placeholder = st.empty()
-    live_plot_key = f"live_grid_plot_{int(time.time() * 1000)}"
-    live_plot_counter = 0
-    
+        live_metrics_placeholder = st.empty()
     controller = MissionController(model_name=model_name)
 
     async def refresh_live_sections() -> None:
-        nonlocal live_plot_counter
+        now = time.time()
+        force_draw = now - st.session_state.get("last_live_render_ts", 0.0) >= 0.15
         state = await fetch_state_async()
         if not state:
             state = st.session_state.get("last_state")
@@ -800,26 +991,30 @@ async def run_stream_agent(briefing: str, model_name: str = None):
             state.get("survivors", []),
             st.session_state.drone_paths if st.session_state.show_paths else {},
         )
-        if fig:
-            live_plot_counter += 1
+        if fig and force_draw:
+            live_key = f"live_grid_plot_{st.session_state.live_plot_seq}"
+            live_grid_placeholder.empty()
             live_grid_placeholder.plotly_chart(
                 fig,
                 width='stretch',
-                key=f"{live_plot_key}_{live_plot_counter}",
+                key=live_key,
             )
+            st.session_state.live_plot_seq += 1
+            st.session_state.last_live_render_ts = now
+
+        render_step_log_panel(live_step_log_placeholder)
 
 
-        with live_summary_placeholder.container():
+        live_metrics_placeholder.empty()
+        with live_metrics_placeholder.container():
             st.subheader("📊 Mission Status")
             st.markdown(render_mission_summary(state))
 
-        with live_drone_table_placeholder.container():
             st.subheader("🚁 Drone Fleet")
             drone_df = render_drone_table(state.get("drones", []))
             if not drone_df.empty:
                 st.dataframe(drone_df, width='stretch', hide_index=True)
 
-        with live_survivor_placeholder.container():
             st.subheader("📍 Identified Survivor Coordinates")
             if st.session_state.identified_survivors:
                 coords = sorted(
@@ -848,25 +1043,37 @@ async def run_stream_agent(briefing: str, model_name: str = None):
 
                 event_type = event.get("type")
                 if event_type == "movement_step":
-                    full_log += (
-                        f"STEP: {event.get('drone_id')} -> ({event.get('x')}, {event.get('y')}) "
-                        f"battery={event.get('battery')}%\n"
+                    step_line = (
+                        f"{event.get('drone_id')} moved to ({event.get('x')}, {event.get('y')}). "
+                        f"Battery is {event.get('battery')}%."
                     )
+                    full_log += step_line + "\n"
+                    append_step_log(step_line)
                     status_placeholder.info(
                         f"{event.get('drone_id')} moved to ({event.get('x')}, {event.get('y')})"
                     )
                 elif event_type == "survivor_detected":
                     coord = {"x": int(event.get("x", -1)), "y": int(event.get("y", -1))}
-                    if coord not in st.session_state.identified_survivors:
+                    coord_key = (coord["x"], coord["y"])
+                    if coord_key not in st.session_state.identified_survivor_set:
+                        st.session_state.identified_survivor_set.add(coord_key)
                         st.session_state.identified_survivors.append(coord)
-                        full_log += f"SURVIVOR DETECTED at ({coord['x']}, {coord['y']})\n"
+                        step_line = f"A survivor was detected at ({coord['x']}, {coord['y']})."
+                        full_log += step_line + "\n"
+                        append_step_log(step_line)
                         status_placeholder.success(
                             f"Survivor identified at ({coord['x']}, {coord['y']})"
                         )
+                elif event_type:
+                    append_step_log(f"System event: {event_type}.")
 
                 await refresh_live_sections()
             else:
                 full_log += chunk
+                for raw_line in chunk.splitlines():
+                    interpreted = interpret_mission_line(raw_line)
+                    if interpreted:
+                        append_step_log(interpreted)
 
             await asyncio.sleep(0.01)
 
@@ -911,22 +1118,37 @@ async def run_stream_agent(briefing: str, model_name: str = None):
 if launch_btn:
     st.session_state.mission_active = True
     st.session_state.mission_complete = False
+    st.session_state.use_snapshot_state = False
     st.session_state.identified_survivors = []
+    st.session_state.identified_survivor_set = set()
+    st.session_state.step_logs = []
+    st.session_state.live_plot_seq = 0
     st.rerun()
 
 if stop_btn:
     st.session_state.mission_active = False
     st.session_state.mission_complete = True
+    # Freeze UI on latest known live state to avoid post-stop re-fetch artifacts.
+    st.session_state.use_snapshot_state = True
     st.rerun()
 
 # Run agent if mission is active
 if st.session_state.mission_active and not st.session_state.mission_complete:
+    # Clear previous static panels before drawing live mission UI.
+    with col_grid:
+        st.empty()
+    with col_step_log:
+        st.empty()
+    with col_metrics:
+        st.empty()
+
     # Run the streaming agent with selected model
     agent_output = asyncio.run(run_stream_agent(mission_briefing, st.session_state.selected_model))
     st.session_state.mission_log = agent_output
     st.session_state.mission_active = False
     st.session_state.mission_complete = True
     st.rerun()  # Force a clean redraw to show final state and avoid duplicate UI elements
+    st.stop()
 
 # Display mission log if available
 if st.session_state.mission_log:
@@ -941,12 +1163,20 @@ if st.session_state.mission_log:
 state = None
 
 state: Optional[dict] = None
+is_live_streaming = st.session_state.mission_active and not st.session_state.mission_complete
 
 if not st.session_state.environment_initialized:
     col_grid.info("🔧 Please initialize the environment using the Control Panel on the left.")
+    render_step_log_panel(col_step_log)
+elif is_live_streaming:
+    # Live sections are rendered inside run_stream_agent; skip static panels
+    pass
 else:
-    with st.spinner("Fetching mission state..."):
-        state = fetch_state()
+    if st.session_state.use_snapshot_state and st.session_state.last_state:
+        state = st.session_state.last_state
+    else:
+        with st.spinner("Fetching mission state..."):
+            state = fetch_state()
     
     if state:
         with col_grid:
@@ -963,7 +1193,8 @@ else:
                 else:
                     st.warning("Cannot render grid map.")
 
-        
+        render_step_log_panel(col_step_log)
+
         with col_metrics:
             st.subheader("📊 Mission Status")
             summary = render_mission_summary(state)
@@ -992,6 +1223,7 @@ else:
                 "❌ Cannot fetch environment state. "
                 "Please ensure environment is properly initialized."
             )
+        render_step_log_panel(col_step_log)
 
 # ---------------------------------------------------------------------------
 # Movement Status Display
