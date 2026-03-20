@@ -544,7 +544,7 @@ class PlanExecutor:
 
         if path:
             final_position = {"x": path[-1]["x"], "y": path[-1]["y"]}
-            battery_remaining = step_events[-1].get("battery", 0)
+            battery_remaining = int(drone.get("battery", 0))
         else:
             drone_state = await self.call_mcp_tool("get_drone_state", drone_id=drone_id)
             drone = drone_state.get("drone", {}) if drone_state.get("success") else {}

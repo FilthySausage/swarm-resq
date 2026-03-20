@@ -130,6 +130,18 @@ st.caption("Real-time rescue drone swarm visualization & mission control")
 
 
 # ---------------------------------------------------------------------------
+# View Log Dialog
+# ---------------------------------------------------------------------------
+@st.dialog("Log Viewer", width="large")
+def view_log_modal(title: str, file_path: str):
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        st.text_area(title, value=content, height=600)
+    else:
+        st.warning(f"File {file_path} not found.")
+
+# ---------------------------------------------------------------------------
 # Custom Model Dialog
 # ---------------------------------------------------------------------------
 @st.dialog("Add Custom Model")
@@ -1077,6 +1089,7 @@ async def run_stream_agent(briefing: str, model_name: str = None):
 
             await asyncio.sleep(0.01)
 
+            st.session_state.mission_log = full_log
             with log_placeholder.container():
                 st.markdown("### MISSION LOG")
                 st.code(full_log[-5000:], language="text")
@@ -1122,7 +1135,15 @@ if launch_btn:
     st.session_state.identified_survivors = []
     st.session_state.identified_survivor_set = set()
     st.session_state.step_logs = []
+    st.session_state.mission_log = ""
     st.session_state.live_plot_seq = 0
+    
+    # Reset log files on disk to prevent reading out-of-date runs
+    with open("mission_log.txt", "w", encoding="utf-8") as f:
+        f.write("")
+    with open("step_log.txt", "w", encoding="utf-8") as f:
+        f.write("")
+
     st.rerun()
 
 if stop_btn:
@@ -1130,6 +1151,14 @@ if stop_btn:
     st.session_state.mission_complete = True
     # Freeze UI on latest known live state to avoid post-stop re-fetch artifacts.
     st.session_state.use_snapshot_state = True
+    
+    # Write full logs to disk even if manually stopped
+    with open("mission_log.txt", "w", encoding="utf-8") as f:
+        f.write(st.session_state.get("mission_log", ""))
+    
+    with open("step_log.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(st.session_state.get("step_logs", [])))
+
     st.rerun()
 
 # Run agent if mission is active
@@ -1145,6 +1174,14 @@ if st.session_state.mission_active and not st.session_state.mission_complete:
     # Run the streaming agent with selected model
     agent_output = asyncio.run(run_stream_agent(mission_briefing, st.session_state.selected_model))
     st.session_state.mission_log = agent_output
+    
+    # Write full logs to disk
+    with open("mission_log.txt", "w", encoding="utf-8") as f:
+        f.write(agent_output)
+    
+    with open("step_log.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(st.session_state.get("step_logs", [])))
+
     st.session_state.mission_active = False
     st.session_state.mission_complete = True
     st.rerun()  # Force a clean redraw to show final state and avoid duplicate UI elements
@@ -1266,4 +1303,18 @@ if st.checkbox("Show debug info"):
     st.write("**Session State:**", st.session_state)
     with st.expander("Full API Response"):
         st.json(state if state else {})
+
+# ---------------------------------------------------------------------------
+# View Log Files
+# ---------------------------------------------------------------------------
+if st.session_state.mission_complete:
+    st.divider()
+    st.subheader("📄 View Saved Log Files")
+    col_log1, col_log2 = st.columns(2)
+    with col_log1:
+        if st.button("👁️ View Mission Log File", use_container_width=True):
+            view_log_modal("Mission Log", "mission_log.txt")
+    with col_log2:
+        if st.button("👁️ View Step Log File", use_container_width=True):
+            view_log_modal("Step Log", "step_log.txt")
 

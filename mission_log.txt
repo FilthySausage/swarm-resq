@@ -1,0 +1,767 @@
+======================================================================
+SWARM-RESQ MISSION START
+======================================================================
+Model: Ollama Qwen 2.5 3B (Local)
+Model ID: qwen2.5:3b
+Model base URL: http://localhost:11434/v1
+Target survivors: 5
+
+======================================================================
+TURN 1
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Assign drones to explore unvisited areas while avoiding collisions....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Assign drones to explore unvisited areas while avoiding collisions.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: search_continuous
+  Reason: explore unvisited area
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 98%
+
+[drone-2]
+  Action: search_continuous
+  Reason: explore unvisited area
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 98%
+
+[drone-3]
+  Action: search_continuous
+  Reason: explore unvisited area
+  -> drone-3: Searching north_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-4]
+  Action: search_continuous
+  Reason: explore unvisited area
+  -> drone-4: Searching south_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 98%
+
+[drone-5]
+  Action: search_continuous
+  Reason: explore unvisited area
+  -> drone-5: Searching north (continuous)
+    [SURVIVOR] DETECTED at (2, 19)
+    [OK] moved 2 steps, stopped by detected_survivor, battery: 0%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 1
+  1. (2, 19)
+drone-1 moved to (15, 15). Battery is 99%.
+drone-1 moved to (14, 16). Battery is 98%.
+drone-2 moved to (12, 17). Battery is 99%.
+drone-2 moved to (13, 16). Battery is 98%.
+drone-3 moved to (19, 2). Battery is 99%.
+drone-3 moved to (18, 3). Battery is 98%.
+drone-4 moved to (9, 9). Battery is 99%.
+drone-4 moved to (8, 8). Battery is 98%.
+drone-5 moved to (0, 18). Battery is 99%.
+drone-5 moved to (0, 19). Battery is 98%.
+A survivor was detected at (2, 19).
+Discovered survivors so far: 1
+Coordinates: [{'x': 2, 'y': 19}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 2
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Ensure drones avoid known obstacles and hazards while exploring unvisited areas....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Ensure drones avoid known obstacles and hazards while exploring unvisited areas.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 96%
+
+[drone-2]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-3: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-4]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-4: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-5]
+  Action: return_to_base
+  Reason: Auto-normalized assignment
+  → drone-5: Returning to base (0,0)
+    [FAIL] Failed to reach base, stuck at (0, 5)
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 1
+  1. (2, 19)
+drone-1 moved to (13, 17). Battery is 97%.
+drone-1 moved to (12, 18). Battery is 96%.
+drone-2 moved to (14, 15). Battery is 97%.
+drone-2 moved to (15, 14). Battery is 96%.
+drone-3 moved to (17, 4). Battery is 97%.
+drone-3 moved to (16, 5). Battery is 96%.
+drone-4 moved to (9, 7). Battery is 97%.
+drone-4 moved to (10, 6). Battery is 96%.
+drone-5 moved to (0, 18). Battery is 97%.
+drone-5 moved to (0, 17). Battery is 96%.
+drone-5 moved to (0, 16). Battery is 95%.
+drone-5 moved to (0, 15). Battery is 94%.
+drone-5 moved to (0, 14). Battery is 93%.
+drone-5 moved to (0, 13). Battery is 92%.
+drone-5 moved to (0, 12). Battery is 91%.
+drone-5 moved to (0, 11). Battery is 90%.
+drone-5 moved to (0, 10). Battery is 89%.
+drone-5 moved to (0, 9). Battery is 88%.
+drone-5 moved to (0, 8). Battery is 87%.
+drone-5 moved to (0, 7). Battery is 86%.
+drone-5 moved to (0, 6). Battery is 85%.
+drone-5 moved to (0, 5). Battery is 84%.
+Discovered survivors so far: 1
+Coordinates: [{'x': 2, 'y': 19}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 3
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Assign drones to explore unvisited areas while avoiding collisions and known obstacles....
+  Assignments: 4 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Assign drones to explore unvisited areas while avoiding collisions and known obstacles.
+
+Drone Assignments (4):
+
+[drone-1]
+  Action: search_continuous
+  Reason: short reason (include separation if needed)
+  -> drone-1: Searching north_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 94%
+
+[drone-2]
+  Action: search_continuous
+  Reason: short reason (include separation if needed)
+  -> drone-2: Searching south_west (continuous)
+    [SURVIVOR] DETECTED at (14, 11)
+    [OK] moved 1 steps, stopped by detected_survivor, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: short reason (include separation if needed)
+  -> drone-3: Searching north_west (continuous)
+    [SURVIVOR] DETECTED at (14, 6)
+    [OK] moved 1 steps, stopped by detected_survivor, battery: 0%
+
+[drone-4]
+  Action: search_continuous
+  Reason: short reason (include separation if needed)
+  -> drone-4: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (13, 19). Battery is 95%.
+drone-1 moved to (12, 19). Battery is 94%.
+drone-2 moved to (14, 13). Battery is 95%.
+A survivor was detected at (14, 11).
+drone-3 moved to (15, 6). Battery is 95%.
+A survivor was detected at (14, 6).
+drone-4 moved to (11, 5). Battery is 95%.
+drone-4 moved to (10, 5). Battery is 94%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 4
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Ensure drones avoid known obstacles and hazards while exploring unvisited areas....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Ensure drones avoid known obstacles and hazards while exploring unvisited areas.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: return_to_base
+  Reason: Auto-normalized assignment
+  → drone-1: Returning to base (0,0)
+    [FAIL] Failed to reach base, stuck at (0, 6)
+
+[drone-2]
+  Action: search_continuous
+  Reason: avoid known hazard (10,7)
+  -> drone-2: Searching north_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 93%
+
+[drone-3]
+  Action: search_continuous
+  Reason: avoid known obstacle (15,6)
+  -> drone-3: Searching south_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-4]
+  Action: search_continuous
+  Reason: avoid known hazard (10,7)
+  -> drone-4: Searching north_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-5]
+  Action: search_continuous
+  Reason: avoid known obstacle (15,6)
+  -> drone-5: Searching south_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (11, 19). Battery is 93%.
+drone-1 moved to (10, 19). Battery is 92%.
+drone-1 moved to (9, 19). Battery is 91%.
+drone-1 moved to (8, 19). Battery is 90%.
+drone-1 moved to (7, 19). Battery is 89%.
+drone-1 moved to (6, 19). Battery is 88%.
+drone-1 moved to (5, 19). Battery is 87%.
+drone-1 moved to (4, 19). Battery is 86%.
+drone-1 moved to (3, 19). Battery is 85%.
+drone-1 moved to (2, 19). Battery is 84%.
+drone-1 moved to (1, 19). Battery is 83%.
+drone-1 moved to (0, 19). Battery is 82%.
+drone-1 moved to (0, 18). Battery is 81%.
+drone-1 moved to (0, 17). Battery is 80%.
+drone-1 moved to (0, 16). Battery is 79%.
+drone-1 moved to (0, 15). Battery is 78%.
+drone-1 moved to (0, 14). Battery is 77%.
+drone-1 moved to (0, 13). Battery is 76%.
+drone-1 moved to (0, 12). Battery is 75%.
+drone-1 moved to (0, 11). Battery is 74%.
+drone-1 moved to (0, 10). Battery is 73%.
+drone-1 moved to (0, 9). Battery is 72%.
+drone-1 moved to (0, 8). Battery is 71%.
+drone-1 moved to (0, 7). Battery is 70%.
+drone-1 moved to (0, 6). Battery is 69%.
+drone-2 moved to (15, 14). Battery is 94%.
+drone-2 moved to (16, 15). Battery is 93%.
+drone-3 moved to (14, 5). Battery is 94%.
+drone-3 moved to (13, 4). Battery is 93%.
+drone-4 moved to (11, 6). Battery is 93%.
+drone-4 moved to (12, 7). Battery is 92%.
+drone-5 moved to (1, 4). Battery is 83%.
+drone-5 moved to (2, 3). Battery is 82%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 5
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Ensure drones avoid collisions and explore unvisited areas....
+  Assignments: 4 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Ensure drones avoid collisions and explore unvisited areas.
+
+Drone Assignments (4):
+
+[drone-1]
+  Action: search_continuous
+  Reason: separate from drone-2
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-2]
+  Action: search_continuous
+  Reason: separate from drone-1
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: separate from drone-4
+  -> drone-3: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-4]
+  Action: search_continuous
+  Reason: separate from drone-3
+  -> drone-4: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 90%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (0, 7). Battery is 68%.
+drone-1 moved to (0, 8). Battery is 67%.
+drone-2 moved to (17, 14). Battery is 92%.
+drone-2 moved to (18, 13). Battery is 91%.
+drone-3 moved to (12, 5). Battery is 92%.
+drone-3 moved to (11, 6). Battery is 91%.
+drone-4 moved to (13, 6). Battery is 91%.
+drone-4 moved to (14, 5). Battery is 90%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 6
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Assign drones to explore unvisited areas while avoiding known obstacles and hazards....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Assign drones to explore unvisited areas while avoiding known obstacles and hazards.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: search_continuous
+  Reason: avoid obstacle (1,7)
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 65%
+
+[drone-2]
+  Action: search_continuous
+  Reason: avoid hazard (3,2)
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: avoid obstacle (11,4)
+  -> drone-3: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-4]
+  Action: search_continuous
+  Reason: avoid hazard (10,7)
+  -> drone-4: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 88%
+
+[drone-5]
+  Action: search_continuous
+  Reason: avoid obstacle (17,5)
+  -> drone-5: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (0, 9). Battery is 66%.
+drone-1 moved to (0, 10). Battery is 65%.
+drone-2 moved to (19, 12). Battery is 90%.
+drone-2 moved to (18, 12). Battery is 89%.
+drone-3 moved to (11, 7). Battery is 90%.
+drone-3 moved to (11, 8). Battery is 89%.
+drone-4 moved to (15, 4). Battery is 89%.
+drone-4 moved to (16, 3). Battery is 88%.
+drone-5 moved to (1, 4). Battery is 81%.
+drone-5 moved to (0, 5). Battery is 80%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 7
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Ensure drones avoid known obstacles and hazards while exploring unvisited areas....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Ensure drones avoid known obstacles and hazards while exploring unvisited areas.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 63%
+
+[drone-2]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-3: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 87%
+
+[drone-4]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-4: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-5]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-5: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (0, 11). Battery is 64%.
+drone-1 moved to (0, 12). Battery is 63%.
+drone-2 moved to (19, 11). Battery is 88%.
+drone-2 moved to (18, 11). Battery is 87%.
+drone-3 moved to (10, 9). Battery is 88%.
+drone-3 moved to (9, 10). Battery is 87%.
+drone-4 moved to (17, 2). Battery is 87%.
+drone-4 moved to (18, 1). Battery is 86%.
+drone-5 moved to (0, 6). Battery is 79%.
+drone-5 moved to (0, 7). Battery is 78%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 8
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Assign drones to explore unvisited areas while avoiding known obstacles and hazards....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Assign drones to explore unvisited areas while avoiding known obstacles and hazards.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: search_continuous
+  Reason: avoid obstacle at (0,4)
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 61%
+
+[drone-2]
+  Action: search_continuous
+  Reason: avoid hazard at (13,7)
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: avoid obstacle at (9,10)
+  -> drone-3: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 85%
+
+[drone-4]
+  Action: search_continuous
+  Reason: avoid hazard at (10,7)
+  -> drone-4: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-5]
+  Action: search_continuous
+  Reason: avoid obstacle at (0,7)
+  -> drone-5: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 76%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (0, 13). Battery is 62%.
+drone-1 moved to (0, 14). Battery is 61%.
+drone-2 moved to (19, 10). Battery is 86%.
+drone-2 moved to (18, 10). Battery is 85%.
+drone-3 moved to (8, 11). Battery is 86%.
+drone-3 moved to (7, 12). Battery is 85%.
+drone-4 moved to (19, 0). Battery is 85%.
+drone-4 moved to (18, 0). Battery is 84%.
+drone-5 moved to (0, 8). Battery is 77%.
+drone-5 moved to (0, 9). Battery is 76%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 9
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Ensure drones explore different areas to avoid collisions and cover unvisited cells....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Ensure drones explore different areas to avoid collisions and cover unvisited cells.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 59%
+
+[drone-2]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-3: Searching north_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 83%
+
+[drone-4]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-4: Searching south_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 82%
+
+[drone-5]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-5: Searching north (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (0, 15). Battery is 60%.
+drone-1 moved to (0, 16). Battery is 59%.
+drone-2 moved to (19, 9). Battery is 84%.
+drone-2 moved to (18, 9). Battery is 83%.
+drone-3 moved to (8, 13). Battery is 84%.
+drone-3 moved to (9, 14). Battery is 83%.
+drone-4 moved to (17, 0). Battery is 83%.
+drone-4 moved to (16, 0). Battery is 82%.
+drone-5 moved to (0, 10). Battery is 75%.
+drone-5 moved to (0, 11). Battery is 74%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 10
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Ensure drones move in different directions to avoid collisions and prioritize unvisited areas....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Ensure drones move in different directions to avoid collisions and prioritize unvisited areas.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 57%
+
+[drone-2]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-3: Searching north_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 81%
+
+[drone-4]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-4: Searching south_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 80%
+
+[drone-5]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-5: Searching north (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 72%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (0, 17). Battery is 58%.
+drone-1 moved to (0, 18). Battery is 57%.
+drone-2 moved to (19, 8). Battery is 82%.
+drone-2 moved to (19, 9). Battery is 81%.
+drone-3 moved to (10, 15). Battery is 82%.
+drone-3 moved to (11, 16). Battery is 81%.
+drone-4 moved to (15, 0). Battery is 81%.
+drone-4 moved to (14, 0). Battery is 80%.
+drone-5 moved to (0, 12). Battery is 73%.
+drone-5 moved to (0, 13). Battery is 72%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 11
+======================================================================
+AI decision received for this turn. Executing movements...
+[OK] Plan parsed successfully: unvisited_areas strategy
+  Thought: Ensure drones move in different directions to avoid collisions and prioritize unvisited areas....
+  Assignments: 5 drones
+
+======================================================================
+EXECUTING MISSION PLAN
+======================================================================
+Strategy: unvisited_areas
+Thought: Ensure drones move in different directions to avoid collisions and prioritize unvisited areas.
+
+Drone Assignments (5):
+
+[drone-1]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-1: Searching north_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 55%
+
+[drone-2]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-2: Searching south_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+
+[drone-3]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-3: Searching north_east (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 79%
+
+[drone-4]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-4: Searching south_west (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 78%
+
+[drone-5]
+  Action: search_continuous
+  Reason: Auto-normalized assignment
+  -> drone-5: Searching north (continuous)
+    [OK] moved 2 steps, stopped by max_steps, battery: 70%
+
+======================================================================
+EXECUTION COMPLETE
+======================================================================
+Survivors discovered: 3
+  1. (2, 19)
+  2. (14, 11)
+  3. (14, 6)
+drone-1 moved to (0, 19). Battery is 56%.
+drone-1 moved to (1, 19). Battery is 55%.
+drone-2 moved to (19, 8). Battery is 80%.
+drone-2 moved to (19, 7). Battery is 79%.
+drone-3 moved to (12, 17). Battery is 80%.
+drone-3 moved to (13, 18). Battery is 79%.
+drone-4 moved to (13, 0). Battery is 79%.
+drone-4 moved to (12, 0). Battery is 78%.
+drone-5 moved to (0, 14). Battery is 71%.
+drone-5 moved to (0, 15). Battery is 70%.
+Discovered survivors so far: 3
+Coordinates: [{'x': 2, 'y': 19}, {'x': 14, 'y': 11}, {'x': 14, 'y': 6}]
+Waiting 2.0s before next AI turn...
+
+======================================================================
+TURN 12
+======================================================================
