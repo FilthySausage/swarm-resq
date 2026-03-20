@@ -450,29 +450,18 @@ with st.sidebar:
     # Visualization settings
     st.subheader("📊 Display Options")
     show_grid = st.checkbox("Show Grid", value=True)
-    show_legend = st.checkbox("Show Legend", value=True)
     st.session_state.show_paths = st.checkbox("Show Movement Paths", value=True)
     auto_refresh = st.checkbox("Auto-refresh", value=True)
-    
+
     if auto_refresh:
         refresh_rate = st.slider("Refresh rate (s)", 1, 10, POLL_INTERVAL)
-    
-    st.divider()
-    
-    # Legend
-    if show_legend:
-        st.subheader("ℹ️ Legend")
-        for symbol, emoji in CELL_COLORS.items():
-            labels = {
-                ".": "Empty",
-                "#": "Obstacle",
-                "S": "Survivor",
-                "X": "Hazard",
-                "D": "Drone",
-                "R": "Rescued",
-            }
-            st.write(f"{emoji}  {labels.get(symbol, '?')}")
 
+    st.divider()
+
+    st.subheader("🎨 Map Colors")
+    st.session_state.color_obstacle = st.color_picker("Obstacle Color", value=st.session_state.get("color_obstacle", "#00AA00"))
+    st.session_state.color_survivor = st.color_picker("Survivor Color", value=st.session_state.get("color_survivor", "#FF00FF"))
+    st.session_state.color_hazard = st.color_picker("Hazard Color", value=st.session_state.get("color_hazard", "#FF4444"))
 # ---------------------------------------------------------------------------
 # Main layout
 # ---------------------------------------------------------------------------
@@ -567,21 +556,19 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
     # Map cell types to numeric values for color coding
     cell_color_map = {
         ".": 0,   # Empty - light
-        "#": 3,   # Obstacle - dark
-        "S": 2,   # Survivor - orange target
         "X": 1,   # Hazard - red warning
-        "R": 4,   # Rescued - green
+        "S": 2,   # Survivor - orange target
+        "#": 3,   # Obstacle - dark
     }
-    
+
     # Map cell types to readable names for hover text
     cell_name_map = {
         ".": "Empty",
         "#": "Obstacle",
         "S": "Survivor",
         "X": "Hazard",
-        "R": "Rescued",
     }
-    
+
     # Fill the grid
     for row in cells:
         for cell in row:
@@ -597,17 +584,18 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
     # Add heatmap for the grid
     fig.add_trace(go.Heatmap(
         z=grid_visual,
+        zmin=0,
+        zmax=3,
         colorscale=[
             [0.0, "#FFFFFF"],   # Empty - white
-            [0.25, "#FF4444"],  # Hazard - red
-            [0.5, "#FF00FF"],   # Survivor - magenta (high contrast)
-            [0.75, "#00AA00"],  # Obstacle - green
-            [1.0, "#00CC00"],   # Rescued - green
+            [0.333, st.session_state.get("color_hazard", "#FF4444")],  # Hazard
+            [0.666, st.session_state.get("color_survivor", "#FF00FF")],   # Survivor
+            [1.0, st.session_state.get("color_obstacle", "#00AA00")],  # Obstacle
         ],
         colorbar=dict(
             title="Cell Type",
-            tickvals=[0, 1, 2, 3, 4],
-            ticktext=["Empty", "Hazard", "Survivor", "Obstacle", "Rescued"],
+            tickvals=[0, 1, 2, 3],
+            ticktext=["Empty", "Hazard", "Survivor", "Obstacle"],
             len=0.5,
         ),
         showscale=True,
