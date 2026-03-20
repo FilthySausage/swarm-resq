@@ -460,6 +460,82 @@ class SimulationEngine:
             result = self.swarm.get_obstacle_map()
             logger.info(f"Obstacle map query: {result.get('obstacle_count')} obstacles found")
             return result
+    
+    # ================================================================
+    # Collision Avoidance Methods
+    # ================================================================
+    
+    async def get_nearby_drones(self, drone_id: str) -> Dict[str, Any]:
+        """Get drones near a specified drone within proximity threshold."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.get_nearby_drones(drone_id)
+            logger.info(f"Nearby drones for {drone_id}: {result.get('nearby_count')} drones found")
+            return result
+    
+    async def get_safe_directions(self, drone_id: str) -> Dict[str, Any]:
+        """Get safe movement directions for a drone."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.get_safe_directions(drone_id)
+            logger.info(f"Safe directions for {drone_id}: {result.get('safe_directions_count')} safe moves available")
+            return result
+    
+    async def get_collision_status(self, drone_id: str) -> Dict[str, Any]:
+        """Get collision and proximity status for a drone."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.get_collision_status(drone_id)
+            logger.info(f"Collision status for {drone_id}: risk={result.get('collision_risk')}")
+            return result
+    
+    async def get_visited_paths(self) -> Dict[str, Any]:
+        """Get all cells that have been visited by any drone."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_visited_paths()
+            logger.info(f"Visited paths: {result.get('visited_count')} cells visited ({result.get('visited_percentage'):.1f}%)")
+            return result
+    
+    async def get_unvisited_percentage(self) -> Dict[str, Any]:
+        """Get percentage of grid that hasn't been visited."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_unvisited_percentage()
+            logger.info(f"Unvisited percentage: {result.get('unvisited_percentage'):.1f}%")
+            return result
+    
+    async def get_drone_separation_plan(self, drone_id: str) -> Dict[str, Any]:
+        """Get recommended direction for a drone to separate from nearby drones."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.get_drone_separation_plan(drone_id)
+            logger.info(f"Separation plan for {drone_id}: {result.get('message')}")
+            return result
+    
+    async def get_swarm_status_report(self) -> Dict[str, Any]:
+        """Get comprehensive status report for all drones and collisions."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_swarm_status_report()
+            logger.info(f"Swarm status: {result.get('drones_with_collision_risk')} drones at risk")
+            return result
 
 
 # ---------------------------------------------------------------------------
@@ -894,6 +970,198 @@ async def reset_mission() -> dict:
         return result
     except Exception as e:
         logger.error(f"reset_mission failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ================================================================
+# Collision Avoidance Tools
+# ================================================================
+
+# Tool: Get Nearby Drones
+@mcp.tool()
+async def get_nearby_drones(drone_id: str) -> dict:
+    """
+    Get drones near a specified drone within proximity threshold.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+    
+    Returns:
+        Dict with:
+        - nearby_count: Number of nearby drones
+        - nearby_drones: List of nearby drones with position and distance
+        - proximity_threshold: Current proximity threshold
+        
+    Useful for: Detecting collision risks and coordinating movements
+    """
+    try:
+        result = await engine.get_nearby_drones(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"get_nearby_drones validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"get_nearby_drones failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Safe Directions
+@mcp.tool()
+async def get_safe_directions(drone_id: str) -> dict:
+    """
+    Get safe movement directions for a drone.
+    Prioritizes unvisited cells and directions away from nearby drones.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+    
+    Returns:
+        Dict with:
+        - safe_directions: List of {dx, dy} tuples sorted by safety score
+        - safe_directions_count: Total safe direction options
+        
+    Safety scoring prioritizes:
+    1. Unvisited cells (exploration priority)
+    2. Distance from nearby drones (separation)
+    3. Opposite direction from conflicting drones
+        
+    Useful for: Dynamic path planning and collision avoidance
+    """
+    try:
+        result = await engine.get_safe_directions(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"get_safe_directions validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"get_safe_directions failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Collision Status
+@mcp.tool()
+async def get_collision_status(drone_id: str) -> dict:
+    """
+    Get comprehensive collision and proximity information for a drone.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+    
+    Returns:
+        Dict with:
+        - collision_risk: Boolean indicating if nearby drones exist
+        - nearby_drones_count: Number of drones within proximity
+        - nearby_drone_ids: List of nearby drone IDs
+        - occupied_cells_count: Number of cells occupied by other drones
+        - occupied_cells: Coordinates of occupied cells
+        
+    Useful for: Making immediate movement decisions
+    """
+    try:
+        result = await engine.get_collision_status(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"get_collision_status validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"get_collision_status failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Visited Paths
+@mcp.tool()
+async def get_visited_paths() -> dict:
+    """
+    Get all cells that have been visited by any drone.
+    
+    Returns:
+        Dict with:
+        - visited_count: Number of visited cells
+        - visited_cells: List of {x, y} coordinates
+        - grid_size: Total cells in grid
+        - visited_percentage: Percentage of grid explored
+        
+    Useful for: Identifying unexplored areas and planning exploration strategy
+    """
+    try:
+        result = await engine.get_visited_paths()
+        return result
+    except Exception as e:
+        logger.error(f"get_visited_paths failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Unvisited Percentage
+@mcp.tool()
+async def get_unvisited_percentage() -> dict:
+    """
+    Get percentage of grid that hasn't been visited.
+    
+    Returns:
+        Dict with:
+        - unvisited_percentage: Percentage of unexplored cells
+        - visited_percentage: Percentage of explored cells
+        
+    Useful for: Monitoring exploration progress and determining when replan needed
+    """
+    try:
+        result = await engine.get_unvisited_percentage()
+        return result
+    except Exception as e:
+        logger.error(f"get_unvisited_percentage failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Drone Separation Plan
+@mcp.tool()
+async def get_drone_separation_plan(drone_id: str) -> dict:
+    """
+    Get recommended direction for a drone to separate from nearby drones.
+    Returns optimal direction or None if no separation needed.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+    
+    Returns:
+        Dict with:
+        - separation_needed: Boolean indicating if separation is required
+        - nearby_drones: List of drone IDs causing conflict (if any)
+        - recommended_direction: {dx, dy} tuple for separation, or None
+        - message: Human-readable explanation
+        
+    Useful for: Resolving detected collisions automatically
+    """
+    try:
+        result = await engine.get_drone_separation_plan(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"get_drone_separation_plan validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"get_drone_separation_plan failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Swarm Status Report
+@mcp.tool()
+async def get_swarm_status_report() -> dict:
+    """
+    Get comprehensive status report for all drones and collision status.
+    
+    Returns:
+        Dict with:
+        - total_drones: Number of active drones
+        - drones_with_collision_risk: Count of drones near others
+        - drones: Status report for each drone with position, trajectory, and risk
+        - visited_percentage: Overall grid exploration progress
+        
+    Useful for: Monitoring swarm health and making coordinated decisions
+    """
+    try:
+        result = await engine.get_swarm_status_report()
+        return result
+    except Exception as e:
+        logger.error(f"get_swarm_status_report failed: {e}")
         return {"success": False, "error": str(e)}
 
 

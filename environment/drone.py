@@ -2,14 +2,15 @@
 drone.py — Drone State & Movement Logic
 
 Defines the Drone dataclass and the DroneSwarm manager that tracks all active
-Drones on the grid.
+Drones on the grid. Integrates collision avoidance for multi-drone coordination.
 """
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Tuple, List
 
 from environment.grid import Grid, CellType
+from orchestrator.collision_avoidance import CollisionAvoidanceManager
 
 
 class DroneStatus(Enum):
@@ -47,6 +48,13 @@ class DroneSwarm:
         self.grid = grid
         self.drones: dict[str, Drone] = {}
         self.survivors_at_base: list[str] = []
+        
+        # Initialize collision avoidance system
+        self.collision_manager = CollisionAvoidanceManager(
+            grid_width=grid.width,
+            grid_height=grid.height,
+            proximity_threshold=5
+        )
 
     def _clear_drone_from_cell(self, x: int, y: int) -> None:
         cell = self.grid.get_cell(x, y)
@@ -72,11 +80,16 @@ class DroneSwarm:
         drone = Drone(drone_id=drone_id, x=x, y=y)
         self.drones[drone_id] = drone
         self._place_drone_on_cell(drone_id, x, y)
+        
+        # Register drone with collision avoidance manager
+        self.collision_manager.register_drone(drone_id, x, y)
+        
         return drone
 
     def move_drone(self, drone_id: str, dx: int, dy: int) -> dict:
         """
         Move a drone by (dx, dy) using bottom-left origin coordinates.
+        Includes collision avoidance check.
         """
         drone = self.drones.get(drone_id)
         if not drone:
@@ -93,6 +106,14 @@ class DroneSwarm:
             return {"success": False, "error": "Cell is an obstacle."}
         if target_cell.cell_type == CellType.HAZARD:
             return {"success": False, "error": "Cell is a hazard."}
+        
+        # Check for drone collision
+        if self.collision_manager.has_drone_collision(drone_id, new_x, new_y):
+            return {
+                "success": False,
+                "error": f"Cell ({new_x}, {new_y}) occupied by another drone. Collision avoided.",
+                "collision_detected": True,
+            }
 
         self._clear_drone_from_cell(drone.x, drone.y)
 
@@ -102,6 +123,10 @@ class DroneSwarm:
         drone.battery = max(0, drone.battery - 1)
 
         self._place_drone_on_cell(drone_id, new_x, new_y)
+        
+        # Update collision avoidance tracking
+        self.collision_manager.update_drone_position(drone_id, new_x, new_y)
+        
         return {"success": True, "drone": drone.to_dict()}
 
     def scan_area(self, drone_id: Optional[str] = None, radius: int = 2) -> dict:
@@ -233,6 +258,7 @@ class DroneSwarm:
     ) -> dict:
         """
         Move a drone in a direction until detection/boundary/obstacle/battery limit.
+        Includes collision avoidance.
         """
         drone = self.drones.get(drone_id)
         if not drone:
@@ -260,11 +286,19 @@ class DroneSwarm:
             if target_cell and target_cell.cell_type in (CellType.OBSTACLE, CellType.HAZARD):
                 stopped_reason = "hazard" if target_cell.cell_type == CellType.HAZARD else "obstacle"
                 break
+            
+            # Check for drone collision (new collision avoidance)
+            if self.collision_manager.has_drone_collision(drone_id, new_x, new_y):
+                stopped_reason = "drone_collision"
+                break
 
             self._clear_drone_from_cell(drone.x, drone.y)
             drone.x, drone.y = new_x, new_y
             drone.battery = max(0, drone.battery - 1)
             self._place_drone_on_cell(drone_id, new_x, new_y)
+            
+            # Update collision avoidance tracking
+            self.collision_manager.update_drone_position(drone_id, new_x, new_y)
 
             path.append({"x": drone.x, "y": drone.y, "step": steps_taken + 1})
             steps_taken += 1
@@ -281,6 +315,11 @@ class DroneSwarm:
                 break
 
         drone.status = DroneStatus.STOPPED
+        
+        # Track visited path in collision manager
+        path_coords = [(p["x"], p["y"]) for p in path]
+        self.collision_manager.mark_visited_path(path_coords)
+        
         return {
             "success": True,
             "drone": drone.to_dict(),
@@ -294,6 +333,7 @@ class DroneSwarm:
     def move_continuous_until_stopped(self, drone_id: str, direction_x: int, direction_y: int) -> dict:
         """
         Move continuously until boundary/obstacle/battery/detection and return full path.
+        Includes collision avoidance - stops if another drone is in the way.
         """
         drone = self.drones.get(drone_id)
         if not drone:
@@ -323,11 +363,19 @@ class DroneSwarm:
             if target_cell and target_cell.cell_type in (CellType.OBSTACLE, CellType.HAZARD):
                 stopped_reason = "hazard" if target_cell.cell_type == CellType.HAZARD else "obstacle"
                 break
+            
+            # Check for drone collision (new collision avoidance)
+            if self.collision_manager.has_drone_collision(drone_id, new_x, new_y):
+                stopped_reason = "drone_collision"
+                break
 
             self._clear_drone_from_cell(drone.x, drone.y)
             drone.x, drone.y = new_x, new_y
             drone.battery = max(0, drone.battery - 1)
             self._place_drone_on_cell(drone_id, new_x, new_y)
+            
+            # Update collision avoidance tracking
+            self.collision_manager.update_drone_position(drone_id, new_x, new_y)
 
             path.append({"x": drone.x, "y": drone.y, "step": steps_taken + 1})
             steps_taken += 1
@@ -344,6 +392,11 @@ class DroneSwarm:
                 break
 
         drone.status = DroneStatus.STOPPED
+        
+        # Track visited path in collision manager
+        path_coords = [(p["x"], p["y"]) for p in path]
+        self.collision_manager.mark_visited_path(path_coords)
+        
         return {
             "success": True,
             "path": path,
@@ -444,3 +497,159 @@ class DroneSwarm:
             "obstacles": obstacles,
             "obstacle_count": len(obstacles),
         }
+
+    # ================================================================
+    # Collision Avoidance Methods
+    # ================================================================
+
+    def get_nearby_drones(self, drone_id: str) -> dict:
+        """
+        Get drones near a specified drone within proximity threshold.
+        
+        Returns information about nearby drones for coordination.
+        """
+        nearby_drones = self.collision_manager.get_nearby_drones(drone_id)
+        nearby_info = []
+        
+        if drone_id not in self.drones:
+            return {"success": False, "error": f"Drone {drone_id} not found."}
+        
+        drone = self.drones[drone_id]
+        
+        for nearby_id in nearby_drones:
+            other_drone = self.drones.get(nearby_id)
+            if other_drone:
+                distance = abs(drone.x - other_drone.x) + abs(drone.y - other_drone.y)
+                nearby_info.append({
+                    "drone_id": nearby_id,
+                    "position": {"x": other_drone.x, "y": other_drone.y},
+                    "distance": distance,
+                    "status": other_drone.status.value,
+                })
+        
+        return {
+            "success": True,
+            "drone_id": drone_id,
+            "nearby_count": len(nearby_info),
+            "nearby_drones": nearby_info,
+            "proximity_threshold": self.collision_manager.proximity_threshold,
+        }
+
+    def get_safe_directions(self, drone_id: str) -> dict:
+        """
+        Get safe movement directions for a drone.
+        Prioritizes unvisited cells and directions away from nearby drones.
+        
+        Returns list of (dx, dy) tuples sorted by safety.
+        """
+        if drone_id not in self.drones:
+            return {"success": False, "error": f"Drone {drone_id} not found."}
+        
+        safe_dirs = self.collision_manager.get_safe_directions(drone_id, self.grid.width, self.grid.height)
+        
+        return {
+            "success": True,
+            "drone_id": drone_id,
+            "safe_directions": [{"dx": dx, "dy": dy} for dx, dy in safe_dirs],
+            "safe_directions_count": len(safe_dirs),
+        }
+
+    def get_collision_status(self, drone_id: str) -> dict:
+        """
+        Get comprehensive collision and proximity information for a drone.
+        """
+        if drone_id not in self.drones:
+            return {"success": False, "error": f"Drone {drone_id} not found."}
+        
+        nearby = self.collision_manager.get_nearby_drones(drone_id)
+        occupied = self.collision_manager.get_occupied_cells(exclude_drone_id=drone_id)
+        
+        return {
+            "success": True,
+            "drone_id": drone_id,
+            "collision_risk": len(nearby) > 0,
+            "nearby_drones_count": len(nearby),
+            "nearby_drone_ids": nearby,
+            "occupied_cells_count": len(occupied),
+            "occupied_cells": [{"x": x, "y": y} for x, y in occupied],
+        }
+
+    def get_visited_paths(self) -> dict:
+        """Get all cells that have been visited by any drone."""
+        visited = self.collision_manager.get_visited_cells()
+        return {
+            "success": True,
+            "visited_count": len(visited),
+            "visited_cells": [{"x": x, "y": y} for x, y in visited],
+            "grid_size": self.grid.width * self.grid.height,
+            "visited_percentage": (len(visited) / (self.grid.width * self.grid.height)) * 100,
+        }
+
+    def get_unvisited_percentage(self) -> dict:
+        """Get percentage of grid that hasn't been visited."""
+        percentage = self.collision_manager.get_unvisited_percentage()
+        return {
+            "success": True,
+            "unvisited_percentage": percentage,
+            "visited_percentage": 100 - percentage,
+        }
+
+    def get_drone_separation_plan(self, drone_id: str) -> dict:
+        """
+        Get recommended direction for a drone to separate from nearby drones.
+        Returns optimal direction or None if no separation needed.
+        """
+        if drone_id not in self.drones:
+            return {"success": False, "error": f"Drone {drone_id} not found."}
+        
+        nearby = self.collision_manager.get_nearby_drones(drone_id)
+        if not nearby:
+            return {
+                "success": True,
+                "drone_id": drone_id,
+                "separation_needed": False,
+                "message": "No nearby drones. No separation needed.",
+            }
+        
+        sep_plan = self.collision_manager.get_separation_plan(drone_id)
+        if sep_plan:
+            return {
+                "success": True,
+                "drone_id": drone_id,
+                "separation_needed": True,
+                "nearby_drones": nearby,
+                "recommended_direction": {"dx": sep_plan[0], "dy": sep_plan[1]},
+                "message": f"Separate from {len(nearby)} nearby drone(s)",
+            }
+        else:
+            return {
+                "success": True,
+                "drone_id": drone_id,
+                "separation_needed": True,
+                "nearby_drones": nearby,
+                "recommended_direction": None,
+                "message": "Separation needed but no safe direction available",
+            }
+
+    def get_swarm_status_report(self) -> dict:
+        """Get comprehensive status report for all drones and collisions."""
+        report = self.collision_manager.get_drone_status_report()
+        
+        collision_risks = [d for d, info in report.items() if info.get("collision_risk")]
+        
+        return {
+            "success": True,
+            "total_drones": len(self.drones),
+            "drones_with_collision_risk": len(collision_risks),
+            "drones": report,
+            "visited_percentage": 100 - self.collision_manager.get_unvisited_percentage(),
+        }
+
+    def reset_collision_tracking(self) -> dict:
+        """Reset collision avoidance tracking (e.g., on mission reset)."""
+        self.collision_manager.reset_visited_paths()
+        return {
+            "success": True,
+            "message": "Collision avoidance tracking reset. Visited paths cleared.",
+        }
+
