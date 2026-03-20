@@ -1,0 +1,81 @@
+{
+  "models": [
+    {
+      "name": "Ollama Qwen 2.5 3B (Local)",
+      "provider": "Ollama",
+      "model_id": "qwen2.5:3b",
+      "base_url": "http://localhost:11434/v1",
+      "requires_key": false,
+      "description": "Runs locally via Ollama with qwen2.5:3b (no OpenRouter API key required)"
+    },
+    {
+      "name": "Ollama Qwen 3.5 4B (Local)",
+      "provider": "Ollama",
+      "model_id": "qwen3.5:4b",
+      "base_url": "http://localhost:11434/v1",
+      "requires_key": false,
+      "max_tokens": 120,
+      "timeout": 20,
+      "extra_body": {
+        "think": false
+      },
+      "description": "Runs locally via Ollama with qwen3.5:4b (no OpenRouter API key required)"
+    },
+    {
+      "name": "Nvidia Nemotron 3 Super 120B (Free)",
+      "provider": "OpenRouter",
+      "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "High-performance reasoning model, free tier available"
+    },
+    {
+      "name": "Meta Llama 3.1 8B (Free)",
+      "provider": "OpenRouter",
+      "model_id": "meta-llama/llama-3.1-8b-instruct:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "Fast and efficient, good for quick responses"
+    },
+    {
+      "name": "Qwen 2.5 7B (Free)",
+      "provider": "OpenRouter",
+      "model_id": "qwen/qwen-2.5-7b-instruct:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "Alibaba's multilingual model"
+    },
+    {
+      "name": "Phi-3 Medium (Free)",
+      "provider": "OpenRouter",
+      "model_id": "microsoft/phi-3-medium-128k-instruct:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": "Microsoft's compact model with long context"
+    },
+    {
+      "name": "StepFun: Step 3.5 Flash (Free)",
+      "provider": "OpenRouter",
+      "model_id": "stepfun/step-3.5-flash:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": ""
+    },
+    {
+      "name": "LiquidAI: LFM2.5-1.2B-Thinking (Free)",
+      "provider": "OpenRouter",
+      "model_id": "liquid/lfm-2.5-1.2b-thinking:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": true,
+      "description": ""
+    }
+  ],
+  "default_model": "qwen2.5:3b",
+  "notes": [
+    "Ollama local model is default for offline/local testing",
+    "OpenRouter models remain available when OPENROUTER_API_KEY is configured",
+    "Ollama endpoint can be overridden with OLLAMA_BASE_URL in .env",
+    "You can add more models manually by following the same format",
+    "Get your OpenRouter API key from: https://openrouter.ai/keys"
+  ]
+}

@@ -1,104 +1,1553 @@
 """
-server.py — FastMCP Server
+server.py — FastMCP Server with Async Support & State Management
 Member 2 (MCP/API) workspace.
 
-Exposes drone actions as MCP tools that the LangChain agent
-(Member 1) can discover and call via the MCP protocol.
+Exposes drone actions as MCP tools via FastMCP.
+Features:
+  - Async tool functions (non-blocking event loop)
+  - asyncio.Lock for thread-safe concurrent access
+  - Comprehensive input validation
+  - Structured error handling
+  - Mission reset/initialization
 
 Run with:
     uvicorn mcp_server.server:app --reload --port 8000
 """
 
+import asyncio
+import logging
+import random
+from typing import Optional, Dict, Any
+from enum import Enum
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
-from environment.grid import Grid, CellType
+from environment.grid import Grid, CellType, place_survivors, place_hazards, place_obstacles
 from environment.drone import DroneSwarm
 
 # ---------------------------------------------------------------------------
-# Shared simulation state
-# In production, replace with a proper state store (Redis, shared memory, etc.)
+# Logging Configuration
 # ---------------------------------------------------------------------------
-_grid = Grid(width=20, height=20)
-_swarm = DroneSwarm(grid=_grid)
-
-# Seed a few drones for testing
-_swarm.add_drone("drone-1", x=0, y=0)
-_swarm.add_drone("drone-2", x=19, y=0)
-_swarm.add_drone("drone-3", x=0, y=19)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# FastMCP app
+# Simulation State Manager (Singleton with Async Lock)
+# ---------------------------------------------------------------------------
+
+class SimulationState(Enum):
+    """Mission lifecycle states."""
+    NOT_STARTED = "not_started"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETE = "complete"
+
+
+class SimulationEngine:
+    """
+    Thread-safe simulation engine with async lock for concurrent access.
+    Manages grid state, drone swarm, and mission lifecycle.
+    
+    Usage:
+        engine = SimulationEngine()
+        await engine.initialize_mission(width=20, height=20)
+        result = await engine.move_drone("drone-1", 1, 0)
+    """
+    
+    _instance: Optional['SimulationEngine'] = None
+    _lock: Optional[asyncio.Lock] = None
+    
+    def __new__(cls) -> 'SimulationEngine':
+        """Singleton pattern for shared global state."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        """Initialize engine (only once due to singleton)."""
+        if not self._initialized:
+            self._lock = asyncio.Lock()
+            self.grid: Optional[Grid] = None
+            self.swarm: Optional[DroneSwarm] = None
+            self.state = SimulationState.NOT_STARTED
+            self.move_count = 0
+            self.mission_id = ""
+            self._initialized = True
+            logger.info("SimulationEngine initialized (singleton)")
+    
+    async def _ensure_initialized(self) -> None:
+        """Ensure grid and swarm are initialized."""
+        if self.grid is None or self.swarm is None:
+            raise RuntimeError(
+                "Simulation not initialized. Call initialize_mission() first."
+            )
+    
+    async def initialize_mission(
+        self,
+        width: int = 20,
+        height: int = 20,
+        drone_count: int = 3,
+        survivor_count: int = 5,
+        hazard_count: int = 8,
+        obstacle_count: int = 15,
+    ) -> Dict[str, Any]:
+        """
+        Initialize a new mission with grid and drones.
+        
+        Args:
+            width: Grid width
+            height: Grid height
+            drone_count: Number of drones to deploy
+            survivor_count: Number of survivors to place
+            hazard_count: Number of hazards
+            obstacle_count: Number of obstacles
+            
+        Returns:
+            Initialization result with grid info and drone list
+        """
+        async with self._lock:
+            logger.info(f"Initializing mission: {width}x{height} grid, {drone_count} drones")
+            
+            # Create fresh grid
+            self.grid = Grid(width=width, height=height)
+            self.swarm = DroneSwarm(grid=self.grid)
+            self.state = SimulationState.ACTIVE
+            self.move_count = 0
+            self.mission_id = f"mission_{int(__import__('time').time())}"
+            
+            # Deploy drones at randomized empty coordinates
+            drone_ids = []
+            occupied = set()
+            for i in range(drone_count):
+                drone_id = f"drone-{i + 1}"
+                while True:
+                    x = random.randint(0, width - 1)
+                    y = random.randint(0, height - 1)
+                    if (x, y) not in occupied:
+                        occupied.add((x, y))
+                        self.swarm.add_drone(drone_id, x=x, y=y)
+                        drone_ids.append(drone_id)
+                        break
+            
+            # Place environment elements
+            place_obstacles(self.grid, count=obstacle_count)
+            place_hazards(self.grid, count=hazard_count)
+            survivors = place_survivors(self.grid, count=survivor_count)
+            
+            # Clear movement path cache
+            try:
+                from orchestrator.path_tracker import clear_paths
+                clear_paths()
+            except ImportError:
+                pass
+            
+            result = {
+                "success": True,
+                "mission_id": self.mission_id,
+                "grid": {"width": width, "height": height, "total_cells": width * height},
+                "drones": drone_ids,
+                "environment": {
+                    "survivors": len(survivors),
+                    "hazards": hazard_count,
+                    "obstacles": obstacle_count,
+                },
+                "message": f"Mission initialized with {len(drone_ids)} drones",
+            }
+            
+            logger.info(f"Mission initialized: {result['message']}")
+            return result
+    
+    async def reset_mission(self) -> Dict[str, Any]:
+        """Reset mission to initial state."""
+        async with self._lock:
+            logger.info("Resetting mission")
+            self.grid = None
+            self.swarm = None
+            self.state = SimulationState.NOT_STARTED
+            self.move_count = 0
+            
+            try:
+                from orchestrator.path_tracker import clear_paths
+                clear_paths()
+            except ImportError:
+                pass
+                
+            return {"success": True, "message": "Mission reset"}
+    
+    async def get_swarm_state(self) -> Dict[str, Any]:
+        """
+        Get full swarm and grid state with exploration guidance.
+        
+        Prioritizes identification of unscanned areas and provides recommendations
+        for efficient exploration coverage.
+        
+        Returns:
+            Dict with:
+                - drones: Current drone states
+                - grid: Grid state with cell information
+                - survivors_rescued: Rescue progress
+                - exploration: Unscanned cells, coverage %, and movement recommendations
+        """
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            state = self.swarm.get_state()
+            exploration_state = self.swarm.get_exploration_state()
+            
+            state.update({
+                "mission_id": self.mission_id,
+                "state": self.state.value,
+                "move_count": self.move_count,
+                "survivors_at_base": self.swarm.survivors_at_base,
+                "exploration": exploration_state,
+            })
+            return state
+    
+    async def move_drone(
+        self,
+        drone_id: str,
+        dx: int,
+        dy: int,
+    ) -> Dict[str, Any]:
+        """
+        Move a drone by (dx, dy).
+        
+        Args:
+            drone_id: Drone identifier
+            dx: X delta (-1, 0, or 1)
+            dy: Y delta (-1, 0, or 1)
+            
+        Returns:
+            Result with success status and new drone state
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            # Validate inputs
+            if not isinstance(dx, int) or not isinstance(dy, int):
+                raise ValueError("dx and dy must be integers")
+            
+            if abs(dx) > 1 or abs(dy) > 1:
+                raise ValueError(f"Invalid delta: ({dx}, {dy}). Must be in [-1, 1]")
+            
+            if dx == 0 and dy == 0:
+                raise ValueError("Move must change at least one coordinate")
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            drone = self.swarm.drones[drone_id]
+            
+            # Check battery
+            if drone.battery < 5:
+                return {
+                    "success": False,
+                    "error": f"Drone {drone_id} battery too low ({drone.battery}%) to move",
+                }
+            
+            # Perform move
+            result = self.swarm.move_drone(drone_id, dx, dy)
+            
+            if result["success"]:
+                self.move_count += 1
+                logger.info(f"Moved {drone_id} by ({dx},{dy}) → ({drone.x},{drone.y})")
+            else:
+                logger.warning(f"Move failed for {drone_id}: {result.get('error', 'unknown')}")
+            
+            return result
+    
+    async def scan_area(
+        self,
+        drone_id: Optional[str] = None,
+        radius: int = 2,
+    ) -> Dict[str, Any]:
+        """
+        Scan cells within radius of drone.
+        
+        Args:
+            drone_id: Drone identifier
+            radius: Scan radius (default 2)
+            
+        Returns:
+            List of detections
+            
+        Raises:
+            ValueError: If drone not found
+        """
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id is not None and drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            if radius < 1 or radius > 5:
+                raise ValueError(f"Invalid radius: {radius}. Must be in [1, 5]")
+            
+            result = self.swarm.scan_area(drone_id, radius)
+            logger.info(f"Scanned area around {drone_id} (radius {radius})")
+            return result
+    
+    async def rescue_survivor(
+        self,
+        drone_id: str,
+        target_x: int,
+        target_y: int,
+    ) -> Dict[str, Any]:
+        """
+        Rescue survivor at (target_x, target_y).
+        
+        Args:
+            drone_id: Drone identifier
+            target_x: Survivor X coordinate
+            target_y: Survivor Y coordinate
+            
+        Returns:
+            Result with rescue status
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            # Validate coordinates
+            if not self.grid.in_bounds(target_x, target_y):
+                raise ValueError(
+                    f"Survivor location ({target_x}, {target_y}) out of bounds"
+                )
+            
+            result = self.swarm.rescue_survivor(drone_id, target_x, target_y)
+            
+            if result["success"]:
+                logger.info(f"{drone_id} rescued survivor at ({target_x}, {target_y})")
+            else:
+                logger.warning(f"Rescue failed: {result.get('error', 'unknown')}")
+            
+            return result
+    
+    async def return_to_base(self, drone_id: str) -> Dict[str, Any]:
+        """
+        Return drone with cargo to base.
+        
+        Args:
+            drone_id: Drone identifier
+            
+        Returns:
+            Result with delivery status
+            
+        Raises:
+            ValueError: If drone not found
+        """
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.return_to_base(drone_id, base_x=0, base_y=0)
+            
+            if result["success"]:
+                survivors_count = len(self.swarm.survivors_at_base)
+                logger.info(f"{drone_id} delivered survivor. Total rescued: {survivors_count}")
+            else:
+                logger.warning(f"Return to base failed: {result.get('error', 'unknown')}")
+            
+            return result
+    
+    async def get_survivor_counts(self) -> Dict[str, Any]:
+        """Get survivor counts across all states."""
+        async with self._lock:
+            await self._ensure_initialized()
+            counts = self.swarm.get_survivor_count()
+            logger.info(f"Survivor counts: {counts}")
+            return counts
+    
+    async def move_until_detect(
+        self,
+        drone_id: str,
+        direction_x: int,
+        direction_y: int,
+        scan_radius: int = 2,
+        max_steps: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Move a drone in a direction until it detects something.
+        Optimizes API calls by combining movement and scanning.
+        
+        Args:
+            drone_id: Drone identifier
+            direction_x: Direction X (-1, 0, or 1)
+            direction_y: Direction Y (-1, 0, or 1)
+            scan_radius: Scan radius after each move
+            max_steps: Maximum number of steps
+            
+        Returns:
+            Result with moves, detections, and stop reason
+        """
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.move_until_detect(drone_id, direction_x, direction_y, scan_radius, max_steps)
+            logger.info(f"Move until detect {drone_id}: {result.get('moves_count')} steps, stopped_reason={result.get('stopped_reason')}")
+            return result
+    
+    async def move_continuous_until_stopped(
+        self,
+        drone_id: str,
+        direction_x: int,
+        direction_y: int,
+    ) -> Dict[str, Any]:
+        """
+        OPTIMIZED: Move drone continuously until it can't move anymore.
+        Returns full path in single API call to minimize latency.
+        
+        Args:
+            drone_id: Drone identifier
+            direction_x: Direction X (-1, 0, or 1)
+            direction_y: Direction Y (-1, 0, or 1)
+        
+        Returns:
+            Dict with full path, moves count, and stop reason
+        """
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.move_continuous_until_stopped(drone_id, direction_x, direction_y)
+            logger.info(f"Continuous move {drone_id}: {result.get('moves_count')} steps, stopped={result.get('stopped_reason')}")
+            return result
+    
+
+        """Find the nearest unrescued survivor."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_nearest_survivor()
+            logger.info(f"Nearest survivor query: {result}")
+            return result
+    
+    async def estimate_battery_to_target(
+        self,
+        drone_id: str,
+        target_x: int,
+        target_y: int,
+    ) -> Dict[str, Any]:
+        """Estimate battery cost to reach a target."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.estimate_battery_to_target(drone_id, target_x, target_y)
+            logger.info(f"Battery estimate for {drone_id} to ({target_x}, {target_y}): {result.get('estimated_costs', {}).get('total')}%")
+            return result
+    
+    async def get_hazard_map(self) -> Dict[str, Any]:
+        """Get all hazard locations."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_hazard_map()
+            logger.info(f"Hazard map query: {result.get('hazard_count')} hazards found")
+            return result
+    
+    async def get_obstacle_map(self) -> Dict[str, Any]:
+        """Get all obstacle locations."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_obstacle_map()
+            logger.info(f"Obstacle map query: {result.get('obstacle_count')} obstacles found")
+            return result
+    
+    # ================================================================
+    # Collision Avoidance Methods
+    # ================================================================
+    
+    async def get_nearby_drones(self, drone_id: str) -> Dict[str, Any]:
+        """Get drones near a specified drone within proximity threshold."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.get_nearby_drones(drone_id)
+            logger.info(f"Nearby drones for {drone_id}: {result.get('nearby_count')} drones found")
+            return result
+    
+    async def get_safe_directions(self, drone_id: str) -> Dict[str, Any]:
+        """Get safe movement directions for a drone."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.get_safe_directions(drone_id)
+            logger.info(f"Safe directions for {drone_id}: {result.get('safe_directions_count')} safe moves available")
+            return result
+    
+    async def get_collision_status(self, drone_id: str) -> Dict[str, Any]:
+        """Get collision and proximity status for a drone."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.get_collision_status(drone_id)
+            logger.info(f"Collision status for {drone_id}: risk={result.get('collision_risk')}")
+            return result
+    
+    async def get_visited_paths(self) -> Dict[str, Any]:
+        """Get all cells that have been visited by any drone."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_visited_paths()
+            logger.info(f"Visited paths: {result.get('visited_count')} cells visited ({result.get('visited_percentage'):.1f}%)")
+            return result
+    
+    async def get_unvisited_percentage(self) -> Dict[str, Any]:
+        """Get percentage of grid that hasn't been visited."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_unvisited_percentage()
+            logger.info(f"Unvisited percentage: {result.get('unvisited_percentage'):.1f}%")
+            return result
+    
+    async def get_drone_separation_plan(self, drone_id: str) -> Dict[str, Any]:
+        """Get recommended direction for a drone to separate from nearby drones."""
+        async with self._lock:
+            await self._ensure_initialized()
+            
+            if drone_id not in self.swarm.drones:
+                raise ValueError(f"Drone '{drone_id}' not found")
+            
+            result = self.swarm.get_drone_separation_plan(drone_id)
+            logger.info(f"Separation plan for {drone_id}: {result.get('message')}")
+            return result
+    
+    async def get_swarm_status_report(self) -> Dict[str, Any]:
+        """Get comprehensive status report for all drones and collisions."""
+        async with self._lock:
+            await self._ensure_initialized()
+            result = self.swarm.get_swarm_status_report()
+            logger.info(f"Swarm status: {result.get('drones_with_collision_risk')} drones at risk")
+            return result
+
+
+# ---------------------------------------------------------------------------
+# Global Simulation Engine Instance
+# ---------------------------------------------------------------------------
+engine = SimulationEngine()
+
+# ---------------------------------------------------------------------------
+# FastMCP app with Async Tool Handlers
 # ---------------------------------------------------------------------------
 mcp = FastMCP("swarm-resq")
 
-
+#Debug
 @mcp.tool()
-def move_drone(drone_id: str, dx: int, dy: int) -> dict:
-    """
-    Move a drone by a delta (dx, dy) on the grid.
+async def ping():
+    """Test MCP connection"""
+    return "pong"
 
+# Tool: Initialize Mission
+@mcp.tool()
+async def initialize_mission(
+    width: int = 20,
+    height: int = 20,
+    drone_count: int = 3,
+    survivor_count: int = 5,
+) -> dict:
+    """
+    Initialize a new rescue mission.
+    
     Args:
-        drone_id: The unique identifier of the drone (e.g. 'drone-1').
-        dx: Horizontal movement delta. Must be -1, 0, or 1.
-        dy: Vertical movement delta. Must be -1, 0, or 1.
-
+        width: Grid width (default 20)
+        height: Grid height (default 20)
+        drone_count: Number of drones (default 3, max 5)
+        survivor_count: Number of survivors (default 5)
+    
     Returns:
-        A dict with 'success' (bool) and either the updated drone state
-        or an 'error' message.
+        Mission initialization result with grid info and drone IDs
     """
-    return _swarm.move_drone(drone_id, dx, dy)
+    try:
+        if drone_count < 1 or drone_count > 5:
+            raise ValueError(f"drone_count must be in [1, 5], got {drone_count}")
+        if width < 10 or height < 10:
+            raise ValueError(f"Grid must be at least 10x10, got {width}x{height}")
+        
+        result = await engine.initialize_mission(
+            width=width,
+            height=height,
+            drone_count=drone_count,
+            survivor_count=survivor_count,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"initialize_mission failed: {e}")
+        return {"success": False, "error": str(e)}
 
 
+# Tool: Get Swarm State
 @mcp.tool()
-def scan_area(drone_id: str, radius: int = 2) -> dict:
+async def get_swarm_state() -> dict:
     """
-    Scan the area around a drone for survivors, hazards, and obstacles.
+    Get the full swarm state and grid.
+    
+    Returns:
+        Dict with all drone states, grid layout, survivors_at_base, etc.
+    """
+    try:
+        state = await engine.get_swarm_state()
+        return state
+    except Exception as e:
+        logger.error(f"get_swarm_state failed: {e}")
+        return {"success": False, "error": str(e)}
 
+
+# Tool: Move Drone
+@mcp.tool()
+async def move_drone(drone_id: str, dx: int, dy: int) -> dict:
+    """
+    Move a drone by (dx, dy) with battery consumption.
+    
     Args:
-        drone_id: The unique identifier of the drone to use for scanning.
-        radius: Scan radius in grid cells (default: 2).
-
+        drone_id: Drone identifier (e.g. 'drone-1')
+        dx: Horizontal delta in [-1, 0, 1]
+        dy: Vertical delta in [-1, 0, 1]
+    
     Returns:
-        A dict with 'success' (bool) and a list of 'detections', each
-        containing the cell's (x, y) position and type.
+        Result dict with success status and updated drone state
+        
+    Examples:
+        move_drone("drone-1", dx=1, dy=0)    # Move east
+        move_drone("drone-2", dx=-1, dy=-1)  # Move southwest
     """
-    return _swarm.scan_area(drone_id, radius)
+    try:
+        result = await engine.move_drone(drone_id, dx, dy)
+        return result
+    except ValueError as e:
+        logger.warning(f"move_drone validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"move_drone failed: {e}")
+        return {"success": False, "error": str(e)}
 
 
+# Tool: Scan Area
 @mcp.tool()
-def get_swarm_state() -> dict:
+async def scan_area(drone_id: Optional[str] = None, radius: int = 2) -> dict:
     """
-    Get the full current state of the swarm and the grid.
-
-    Returns:
-        A dict containing all drone states and the serialized grid.
-    """
-    return _swarm.get_state()
-
-
-@mcp.tool()
-def get_drone_state(drone_id: str) -> dict:
-    """
-    Get the current state of a single drone.
-
+    Scan the area around a drone for survivors, hazards, obstacles.
+    
     Args:
-        drone_id: The unique identifier of the drone.
-
+        drone_id: Drone identifier
+        radius: Scan radius in cells (default 2, range [1, 5])
+    
     Returns:
-        A dict with the drone's position, status, battery, and cargo,
-        or an error if the drone is not found.
+        Dict with detections list containing {x, y, type} objects
+        
+    Types: 'S' (survivor), 'X' (hazard), '#' (obstacle), '.' (empty)
     """
-    drone = _swarm.drones.get(drone_id)
-    if not drone:
-        return {"success": False, "error": f"Drone '{drone_id}' not found."}
-    return {"success": True, "drone": drone.to_dict()}
+    try:
+        result = await engine.scan_area(drone_id, radius)
+        return result
+    except ValueError as e:
+        logger.warning(f"scan_area validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"scan_area failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Rescue Survivor
+@mcp.tool()
+async def rescue_survivor(drone_id: str, target_x: int, target_y: int) -> dict:
+    """
+    Pick up a survivor at (target_x, target_y).
+    Drone must be at or adjacent to the survivor.
+    
+    Args:
+        drone_id: Drone identifier
+        target_x: Survivor X coordinate
+        target_y: Survivor Y coordinate
+    
+    Returns:
+        Result dict with success status and updated drone state
+        
+    Notes:
+        - Drone must have no cargo
+        - Costs 2% battery
+        - After rescue, use return_to_base() to complete mission
+    """
+    try:
+        result = await engine.rescue_survivor(drone_id, target_x, target_y)
+        return result
+    except ValueError as e:
+        logger.warning(f"rescue_survivor validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"rescue_survivor failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Return to Base
+@mcp.tool()
+async def return_to_base(drone_id: str) -> dict:
+    """
+    Return a drone with cargo to base at (0, 0) to complete rescue.
+    Drone must be carrying cargo and physically at base location.
+    
+    Args:
+        drone_id: Drone identifier
+    
+    Returns:
+        Result dict with delivery confirmation and survivor count
+        
+    Notes:
+        - Only works when drone is at (0, 0)
+        - Completes rescue mission for that survivor
+        - Drone battery recharged after delivery
+    """
+    try:
+        result = await engine.return_to_base(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"return_to_base validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"return_to_base failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Survivor Counts
+@mcp.tool()
+async def get_survivor_counts() -> dict:
+    """
+    Get counts of survivors in all states.
+    
+    Returns:
+        Dict with:
+        - on_grid: Survivors still on grid
+        - in_cargo: Survivors in drone cargo
+        - rescued: Survivors at base
+        - total_found: Total discovered so far
+    """
+    try:
+        counts = await engine.get_survivor_counts()
+        return counts
+    except Exception as e:
+        logger.error(f"get_survivor_counts failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Move Until Detect
+@mcp.tool()
+async def move_until_detect(drone_id: str, direction_x: int, direction_y: int, scan_radius: int = 2, max_steps: int = 10) -> dict:
+    """
+    Move a drone in a direction until it detects a survivor, hazard, or obstacle.
+    Optimizes API calls by combining multiple movements and scans into one call.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+        direction_x: Direction X (-1, 0, or 1)
+        direction_y: Direction Y (-1, 0, or 1)
+        scan_radius: Scan radius after each move (default 2, range [1, 5])
+        max_steps: Maximum steps to move (default 10)
+    
+    Returns:
+        Dict with:
+        - moves_count: Number of moves executed
+        - detections: List of detected objects {x, y, type}
+        - stopped_reason: Why movement stopped (detected, boundary, obstacle, battery, max_steps)
+        - final_position: Final drone coordinates
+        
+    Example:
+        move_until_detect("drone-1", 1, 0, scan_radius=2, max_steps=10)  # Move east until detection
+    """
+    try:
+        result = await engine.move_until_detect(drone_id, direction_x, direction_y, scan_radius, max_steps)
+        return result
+    except ValueError as e:
+        logger.warning(f"move_until_detect validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"move_until_detect failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Move Continuous Until Stopped (OPTIMIZED)
+@mcp.tool()
+async def move_continuous_until_stopped(drone_id: str, direction_x: int, direction_y: int) -> dict:
+    """
+    OPTIMIZED: Move drone continuously in one direction until it cannot move anymore.
+    Returns entire path in single API call - dramatically reduces latency and API calls.
+    
+    This is the PRIMARY method for efficient exploration in Swarm-ResQ.
+    Instead of multiple move_drone calls, use this for continuous movement with full path.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+        direction_x: Direction X (-1, 0, or 1)
+        direction_y: Direction Y (-1, 0, or 1)
+    
+    Returns:
+        Dict with:
+        - path: Complete list of traversed positions [{x, y, step}, ...]
+        - moves_count: Total steps taken
+        - stopped_reason: Why movement stopped (boundary, obstacle, battery)
+        - final_position: Last position
+        - battery_used: Battery consumed
+        - drone: Final drone state
+    
+    Example:
+        # Move drone-1 east until hitting boundary/obstacle
+        result = move_continuous_until_stopped("drone-1", 1, 0)
+        print(f"Moved {result['moves_count']} steps, stopped by {result['stopped_reason']}")
+        print(f"Full path: {result['path']}")
+    
+    Benefits:
+        - 1 API call instead of 10-20
+        - Complete path history included
+        - Same battery cost per move
+        - 20x faster than sequential moves
+    """
+    try:
+        result = await engine.move_continuous_until_stopped(drone_id, direction_x, direction_y)
+        
+        # Track path for UI visualization
+        if result.get("success"):
+            from orchestrator.path_tracker import store_movement_path
+            store_movement_path(drone_id, result)
+        
+        return result
+    except ValueError as e:
+        logger.warning(f"move_continuous_until_stopped validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"move_continuous_until_stopped failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Nearest Survivor
+@mcp.tool()
+async def get_nearest_survivor() -> dict:
+    """
+    Find the nearest unrescued survivor from all drones.
+    Uses Manhattan distance to calculate proximity.
+    
+    Returns:
+        Dict with:
+        - location: {x, y} coordinates of nearest survivor
+        - distance: Manhattan distance from nearest drone
+        - nearest_drone: Which drone is closest
+        
+    Useful for: Planning which drone should go rescue next
+    """
+    try:
+        result = await engine.get_nearest_survivor()
+        return result
+    except Exception as e:
+        logger.error(f"get_nearest_survivor failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Estimate Battery to Target
+@mcp.tool()
+async def estimate_battery_to_target(drone_id: str, target_x: int, target_y: int) -> dict:
+    """
+    Estimate if a drone has enough battery to reach a target and return to base.
+    Includes estimates for movement, scanning, rescue, and return.
+    
+    Args:
+        drone_id: Drone identifier
+        target_x: Target X coordinate
+        target_y: Target Y coordinate
+    
+    Returns:
+        Dict with:
+        - current_battery: Drone's remaining battery
+        - estimated_costs: Breakdown of movement, scanning, rescue, return costs
+        - can_afford: Boolean if drone can complete mission
+        - battery_shortfall: How much battery is needed (if insufficient)
+        
+    Useful for: Planning which drones can afford missions
+    """
+    try:
+        result = await engine.estimate_battery_to_target(drone_id, target_x, target_y)
+        return result
+    except ValueError as e:
+        logger.warning(f"estimate_battery_to_target validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"estimate_battery_to_target failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Hazard Map
+@mcp.tool()
+async def get_hazard_map() -> dict:
+    """
+    Get all known hazard locations on the grid.
+    Hazards are dangerous areas that block movement and discovery.
+    
+    Returns:
+        Dict with:
+        - hazards: List of {x, y} coordinates
+        - hazard_count: Total number of hazards
+        
+    Useful for: Planning drone routes around hazard zones
+    """
+    try:
+        result = await engine.get_hazard_map()
+        return result
+    except Exception as e:
+        logger.error(f"get_hazard_map failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Obstacle Map
+@mcp.tool()
+async def get_obstacle_map() -> dict:
+    """
+    Get all known obstacle locations on the grid.
+    Obstacles block drone movement completely.
+    
+    Returns:
+        Dict with:
+        - obstacles: List of {x, y} coordinates
+        - obstacle_count: Total number of obstacles
+        
+    Useful for: Planning optimal drone paths
+    """
+    try:
+        result = await engine.get_obstacle_map()
+        return result
+    except Exception as e:
+        logger.error(f"get_obstacle_map failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Drone State
+@mcp.tool()
+async def get_drone_state(drone_id: str) -> dict:
+    """
+    Get state of a single drone.
+    
+    Args:
+        drone_id: Drone identifier
+    
+    Returns:
+        Dict with drone position, battery, cargo, status
+    """
+    try:
+        state = await engine.get_swarm_state()
+        for drone in state.get("drones", []):
+            if drone["drone_id"] == drone_id:
+                return {"success": True, "drone": drone}
+        return {"success": False, "error": f"Drone '{drone_id}' not found"}
+    except Exception as e:
+        logger.error(f"get_drone_state failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Reset Mission
+@mcp.tool()
+async def reset_mission() -> dict:
+    """
+    Reset the mission to initial state. Clears all drones and grid.
+    Use initialize_mission() to start a new mission.
+    
+    Returns:
+        Success confirmation
+    """
+    try:
+        result = await engine.reset_mission()
+        return result
+    except Exception as e:
+        logger.error(f"reset_mission failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ================================================================
+# EXPLORATION GUIDANCE TOOLS
+# ================================================================
+
+# Tool: Get Exploration Status
+@mcp.tool()
+async def get_exploration_status() -> dict:
+    """
+    PRIORITY: Get comprehensive exploration status including unscanned cells.
+    
+    Returns exploration state with:
+        - total_unscanned_cells: Count of cells never scanned
+        - scanned_percentage: Coverage % of entire grid
+        - drones: Per-drone exploration guidance with:
+            - nearby_unscanned_count: Unscanned cells within 5 cells
+            - nearest_unscanned: Coordinates of nearest unscanned cell
+            - all_adjacent_scanned: True if drone is trapped in fully explored zone
+            - recommendation: "move_to_unscanned" or "no_unscanned"
+    
+    Use this to:
+        1. Identify which drones are trapped in explored zones
+        2. Find nearest unscanned target for each drone
+        3. Track exploration progress (scanned %)
+        4. Determine if exploration is complete
+        
+    Returns:
+        Dict with exploration metrics and per-drone guidance
+    """
+    try:
+        state = await engine.get_swarm_state()
+        exploration = state.get("exploration", {})
+        return {
+            "success": True,
+            "total_unscanned_cells": exploration.get("total_unscanned_cells", 0),
+            "scanned_percentage": exploration.get("scanned_percentage", 0),
+            "drones": exploration.get("drones", {}),
+        }
+    except Exception as e:
+        logger.error(f"get_exploration_status failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Unscanned Zones
+@mcp.tool()
+async def get_unscanned_zones() -> dict:
+    """
+    PRIORITY: Identify all unscanned zones and clusters.
+    
+    Returns:
+        Dict with:
+        - total_unscanned: Count of unscanned cells
+        - unscanned_cells: List of [x, y] coordinates for all unscanned cells
+        - coverage_percentage: Overall grid coverage by scanning
+        
+    Use this to:
+        1. Identify unexplored regions of the map
+        2. Plan multi-drone exploration strategy
+        3. Determine exploration completion
+    """
+    try:
+        if engine.grid is None:
+            return {"success": False, "error": "Mission not initialized"}
+        
+        async with engine._lock:
+            unscanned = engine.grid.get_all_unscanned_cells()
+            scanned_pct = engine.grid.get_scanned_percentage()
+            
+            return {
+                "success": True,
+                "total_unscanned": len(unscanned),
+                "unscanned_cells": unscanned,
+                "coverage_percentage": round(scanned_pct, 2),
+            }
+    except Exception as e:
+        logger.error(f"get_unscanned_zones failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Direction to Explore
+@mcp.tool()
+async def get_direction_to_explore(drone_id: str) -> dict:
+    """
+    PRIORITY: Get optimal direction for a drone to explore unscanned areas.
+    
+    For a given drone:
+        1. Finds the nearest unscanned cell
+        2. Calculates movement direction toward it
+        3. Checks if drone is trapped (all adjacent cells scanned)
+        4. Returns recommended movement direction
+    
+    Args:
+        drone_id: Drone identifier
+        
+    Returns:
+        Dict with:
+        - success: True if guidance available
+        - nearest_unscanned: {x, y} of closest unscanned cell
+        - direction: {dx, dy} movement direction to take (-1, 0, or 1 each)
+        - distance: Approximate distance to nearest unscanned cell
+        - is_trapped: True if all adjacent cells are already scanned
+        - recommendation: "move_in_direction", "trapped_seek_escape", or "exploration_complete"
+        
+    Usage:
+        1. Call get_direction_to_explore("drone-1")
+        2. Get back {direction: {dx, dy}, nearest_unscanned: {x, y}}
+        3. Use move_drone("drone-1", dx, dy) to follow guidance
+        4. Repeat until recommendation is "exploration_complete"
+    """
+    try:
+        async with engine._lock:
+            await engine._ensure_initialized()
+            
+            if drone_id not in engine.swarm.drones:
+                return {"success": False, "error": f"Drone '{drone_id}' not found"}
+            
+            drone = engine.swarm.drones[drone_id]
+            
+            # Get nearest unscanned cell
+            nearest = engine.grid.get_nearest_unscanned_cell(drone.x, drone.y)
+            
+            if not nearest:
+                return {
+                    "success": True,
+                    "recommendation": "exploration_complete",
+                    "message": "All cells have been scanned",
+                }
+            
+            # Calculate direction to nearest unscanned
+            target_x, target_y = nearest
+            dx = 0 if target_x == drone.x else (-1 if target_x < drone.x else 1)
+            dy = 0 if target_y == drone.y else (-1 if target_y < drone.y else 1)
+            
+            # Calculate distance (Chebyshev)
+            distance = max(abs(target_x - drone.x), abs(target_y - drone.y))
+            
+            # Check if trapped in scanned zone
+            adjacent_unscanned = engine.grid.get_unscanned_cells_in_radius(drone.x, drone.y, radius=1)
+            nearby_unscanned = engine.grid.get_unscanned_cells_in_radius(drone.x, drone.y, radius=5)
+            is_trapped = len(adjacent_unscanned) == 0
+            
+            recommendation = "trapped_seek_escape" if is_trapped else "move_in_direction"
+            
+            return {
+                "success": True,
+                "drone_id": drone_id,
+                "position": {"x": drone.x, "y": drone.y},
+                "nearest_unscanned": {"x": target_x, "y": target_y},
+                "direction": {"dx": dx, "dy": dy},
+                "distance": distance,
+                "nearby_unscanned_count": len(nearby_unscanned),
+                "is_trapped": is_trapped,
+                "recommendation": recommendation,
+            }
+    except Exception as e:
+        logger.error(f"get_direction_to_explore failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ================================================================
+# Collision Avoidance Tools
+# ================================================================
+
+# Tool: Get Nearby Drones
+@mcp.tool()
+async def get_nearby_drones(drone_id: str) -> dict:
+    """
+    Get drones near a specified drone within proximity threshold.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+    
+    Returns:
+        Dict with:
+        - nearby_count: Number of nearby drones
+        - nearby_drones: List of nearby drones with position and distance
+        - proximity_threshold: Current proximity threshold
+        
+    Useful for: Detecting collision risks and coordinating movements
+    """
+    try:
+        result = await engine.get_nearby_drones(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"get_nearby_drones validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"get_nearby_drones failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Safe Directions
+@mcp.tool()
+async def get_safe_directions(drone_id: str) -> dict:
+    """
+    Get safe movement directions for a drone.
+    Prioritizes unvisited cells and directions away from nearby drones.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+    
+    Returns:
+        Dict with:
+        - safe_directions: List of {dx, dy} tuples sorted by safety score
+        - safe_directions_count: Total safe direction options
+        
+    Safety scoring prioritizes:
+    1. Unvisited cells (exploration priority)
+    2. Distance from nearby drones (separation)
+    3. Opposite direction from conflicting drones
+        
+    Useful for: Dynamic path planning and collision avoidance
+    """
+    try:
+        result = await engine.get_safe_directions(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"get_safe_directions validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"get_safe_directions failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Collision Status
+@mcp.tool()
+async def get_collision_status(drone_id: str) -> dict:
+    """
+    Get comprehensive collision and proximity information for a drone.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+    
+    Returns:
+        Dict with:
+        - collision_risk: Boolean indicating if nearby drones exist
+        - nearby_drones_count: Number of drones within proximity
+        - nearby_drone_ids: List of nearby drone IDs
+        - occupied_cells_count: Number of cells occupied by other drones
+        - occupied_cells: Coordinates of occupied cells
+        
+    Useful for: Making immediate movement decisions
+    """
+    try:
+        result = await engine.get_collision_status(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"get_collision_status validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"get_collision_status failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Visited Paths
+@mcp.tool()
+async def get_visited_paths() -> dict:
+    """
+    Get all cells that have been visited by any drone.
+    
+    Returns:
+        Dict with:
+        - visited_count: Number of visited cells
+        - visited_cells: List of {x, y} coordinates
+        - grid_size: Total cells in grid
+        - visited_percentage: Percentage of grid explored
+        
+    Useful for: Identifying unexplored areas and planning exploration strategy
+    """
+    try:
+        result = await engine.get_visited_paths()
+        return result
+    except Exception as e:
+        logger.error(f"get_visited_paths failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Unvisited Percentage
+@mcp.tool()
+async def get_unvisited_percentage() -> dict:
+    """
+    Get percentage of grid that hasn't been visited.
+    
+    Returns:
+        Dict with:
+        - unvisited_percentage: Percentage of unexplored cells
+        - visited_percentage: Percentage of explored cells
+        
+    Useful for: Monitoring exploration progress and determining when replan needed
+    """
+    try:
+        result = await engine.get_unvisited_percentage()
+        return result
+    except Exception as e:
+        logger.error(f"get_unvisited_percentage failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Drone Separation Plan
+@mcp.tool()
+async def get_drone_separation_plan(drone_id: str) -> dict:
+    """
+    Get recommended direction for a drone to separate from nearby drones.
+    Returns optimal direction or None if no separation needed.
+    
+    Args:
+        drone_id: Drone identifier (e.g., 'drone-1')
+    
+    Returns:
+        Dict with:
+        - separation_needed: Boolean indicating if separation is required
+        - nearby_drones: List of drone IDs causing conflict (if any)
+        - recommended_direction: {dx, dy} tuple for separation, or None
+        - message: Human-readable explanation
+        
+    Useful for: Resolving detected collisions automatically
+    """
+    try:
+        result = await engine.get_drone_separation_plan(drone_id)
+        return result
+    except ValueError as e:
+        logger.warning(f"get_drone_separation_plan validation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"get_drone_separation_plan failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Tool: Get Swarm Status Report
+@mcp.tool()
+async def get_swarm_status_report() -> dict:
+    """
+    Get comprehensive status report for all drones and collision status.
+    
+    Returns:
+        Dict with:
+        - total_drones: Number of active drones
+        - drones_with_collision_risk: Count of drones near others
+        - drones: Status report for each drone with position, trajectory, and risk
+        - visited_percentage: Overall grid exploration progress
+        
+    Useful for: Monitoring swarm health and making coordinated decisions
+    """
+    try:
+        result = await engine.get_swarm_status_report()
+        return result
+    except Exception as e:
+        logger.error(f"get_swarm_status_report failed: {e}")
+        return {"success": False, "error": str(e)}
 
 
 # ---------------------------------------------------------------------------
-# TODO (Member 2): Add more tools as Member 3 builds them:
-#   - rescue_survivor(drone_id, target_x, target_y)
-#   - return_to_base(drone_id)
-#   - place_survivors(count)   <- for resetting the simulation
+# FastAPI/MCP Integration
 # ---------------------------------------------------------------------------
 
-# Expose as ASGI app for uvicorn
-app = mcp.streamable_http_app()
+# Create FastAPI application with CORS support
+app = FastAPI(
+    title="Swarm-ResQ Drone Rescue API",
+    description="MCP server for autonomous drone rescue coordination",
+    version="1.0.0",
+)
+
+# Add CORS middleware for Streamlit and cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount MCP ASGI app at /mcp endpoint
+mcp_asgi_app = mcp.streamable_http_app()
+app.mount("/mcp", mcp_asgi_app)
+
+
+# Startup hook: Initialize default mission on server start
+@app.on_event("startup")
+async def startup_event():
+    tools = await mcp.list_tools()
+    print("MCP tools registered:", tools)
+
+    """Initialize default mission when server starts."""
+    logger.info("=== Swarm-ResQ MCP Server Starting ===")
+    result = await initialize_mission(width=20, height=20, drone_count=3)
+    if result["success"]:
+        logger.info(f"Default mission initialized: {result['message']}")
+    else:
+        logger.error(f"Failed to initialize default mission: {result['error']}")
+
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for load balancers."""
+    state = await engine.get_swarm_state()
+    return {
+        "status": "healthy",
+        "mission_active": engine.state == SimulationState.ACTIVE,
+        "drones": len(state.get("drones", [])),
+    }
+
+
+# Status endpoint
+@app.get("/status")
+async def get_status():
+    """Get mission status."""
+    try:
+        state = await engine.get_swarm_state()
+        return {
+            "mission_id": state.get("mission_id", ""),
+            "state": state.get("state", ""),
+            "drones": state.get("drones", []),
+            "move_count": state.get("move_count", 0),
+        }
+    except Exception as e:
+        logger.error(f"Status endpoint error: {e}")
+        return {"error": str(e)}
+
+
+# =========================================================================
+# REST Tool Endpoints (Alternative to MCP HTTP streaming)
+# =========================================================================
+
+@app.post("/tools/initialize_mission")
+async def rest_initialize_mission(
+    width: int = 20,
+    height: int = 20,
+    drone_count: int = 3,
+    survivor_count: int = 5,
+):
+    """Initialize a new rescue mission via REST."""
+    return await initialize_mission(width, height, drone_count, survivor_count)
+
+
+@app.get("/tools/get_swarm_state")
+async def rest_get_swarm_state():
+    """Get the full swarm state via REST."""
+    return await get_swarm_state()
+
+
+@app.post("/tools/move_drone")
+async def rest_move_drone(drone_id: str, dx: int, dy: int):
+    """Move a drone via REST."""
+    return await move_drone(drone_id, dx, dy)
+
+
+@app.post("/tools/scan_area")
+async def rest_scan_area(drone_id: Optional[str] = None, radius: int = 2):
+    """Scan an area via REST."""
+    return await scan_area(drone_id, radius)
+
+
+@app.post("/tools/rescue_survivor")
+async def rest_rescue_survivor(drone_id: str, target_x: int, target_y: int):
+    """Rescue a survivor via REST."""
+    return await rescue_survivor(drone_id, target_x, target_y)
+
+
+@app.post("/tools/return_to_base")
+async def rest_return_to_base(drone_id: str):
+    """Return drone to base via REST."""
+    return await return_to_base(drone_id)
+
+
+@app.get("/tools/get_survivor_counts")
+async def rest_get_survivor_counts():
+    """Get survivor counts via REST."""
+    return await get_survivor_counts()
+
+
+@app.post("/tools/move_until_detect")
+async def rest_move_until_detect(drone_id: str, direction_x: int, direction_y: int, scan_radius: int = 2, max_steps: int = 10):
+    """Move a drone until detection via REST."""
+    return await move_until_detect(drone_id, direction_x, direction_y, scan_radius, max_steps)
+
+
+@app.post("/tools/move_continuous_until_stopped")
+async def rest_move_continuous_until_stopped(drone_id: str, direction_x: int, direction_y: int):
+    """OPTIMIZED: Move drone continuously until stopped via REST. Returns full path."""
+    return await move_continuous_until_stopped(drone_id, direction_x, direction_y)
+
+
+@app.get("/tools/get_nearest_survivor")
+async def rest_get_nearest_survivor():
+    """Get nearest survivor via REST."""
+    return await get_nearest_survivor()
+
+
+@app.post("/tools/estimate_battery_to_target")
+async def rest_estimate_battery_to_target(drone_id: str, target_x: int, target_y: int):
+    """Estimate battery to target via REST."""
+    return await estimate_battery_to_target(drone_id, target_x, target_y)
+
+
+@app.get("/tools/get_hazard_map")
+async def rest_get_hazard_map():
+    """Get hazard map via REST."""
+    return await get_hazard_map()
+
+
+@app.get("/tools/get_obstacle_map")
+async def rest_get_obstacle_map():
+    """Get obstacle map via REST."""
+    return await get_obstacle_map()
+
+
+@app.get("/tools/get_drone_state")
+async def rest_get_drone_state(drone_id: str):
+    """Get single drone state via REST."""
+    return await get_drone_state(drone_id)
+
+
+@app.post("/tools/reset_mission")
+async def rest_reset_mission():
+    """Reset mission via REST."""
+    return await reset_mission()
+
+
+# ================================================================
+# EXPLORATION GUIDANCE ENDPOINTS
+# ================================================================
+
+@app.get("/tools/get_exploration_status")
+async def rest_get_exploration_status():
+    """Get exploration status via REST."""
+    return await get_exploration_status()
+
+
+@app.get("/tools/get_unscanned_zones")
+async def rest_get_unscanned_zones():
+    """Get unscanned zones via REST."""
+    return await get_unscanned_zones()
+
+
+@app.post("/tools/get_direction_to_explore")
+async def rest_get_direction_to_explore(drone_id: str):
+    """Get direction to explore via REST."""
+    return await get_direction_to_explore(drone_id)
+
+
+@mcp.tool()
+async def get_movement_paths() -> dict:
+    """
+    Get all stored drone movement paths from recent move_continuous_until_stopped() calls.
+    Useful for UI visualization of drone exploration patterns.
+    
+    Returns:
+        Dict with drone_id -> path_data mapping
+        Each path_data contains:
+        - path: List of {x, y, step} coordinates
+        - moves_count: Total steps
+        - stopped_reason: Why drone stopped
+        - battery_used: Battery consumed
+        - battery_remaining: Remaining battery
+    """
+    try:
+        from orchestrator.path_tracker import get_all_paths
+        paths = get_all_paths()
+        return {"success": True, "paths": paths}
+    except Exception as e:
+        logger.error(f"get_movement_paths failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/tools/get_movement_paths")
+async def rest_get_movement_paths():
+    """Get movement paths via REST."""
+    return await get_movement_paths()
