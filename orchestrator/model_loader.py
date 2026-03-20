@@ -100,6 +100,49 @@ def add_custom_model(new_model: Dict) -> bool:
         print(f"Error saving custom model: {e}")
         return False
 
+
+def remove_custom_model(model_name: str) -> bool:
+    """
+    Remove a custom model by display name from config/models.json.
+    Refuses to remove non-custom models.
+    """
+    try:
+        if not MODELS_FILE.exists():
+            return False
+
+        with open(MODELS_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        models = config.get("models", [])
+        kept = []
+        removed = False
+        for model in models:
+            name = str(model.get("name", "")).strip()
+            desc = str(model.get("description", "")).strip().lower()
+            is_custom = name.endswith("(Custom)") or desc == "custom user-added model"
+            if name == model_name and is_custom:
+                removed = True
+                continue
+            kept.append(model)
+
+        if not removed:
+            return False
+
+        config["models"] = kept
+
+        # Ensure default model remains valid after deletion.
+        default_id = config.get("default_model")
+        ids = {str(m.get("model_id", "")) for m in kept}
+        if default_id not in ids and kept:
+            config["default_model"] = kept[0].get("model_id")
+
+        with open(MODELS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error removing custom model: {e}")
+        return False
+
 def get_model_list() -> List[str]:
     """
     Get list of model names for UI dropdown

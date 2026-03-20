@@ -28,12 +28,18 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from orchestrator.model_loader import get_model_list, get_model_by_name, get_default_model, add_custom_model
+import orchestrator.model_loader as model_loader
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
+
+get_model_list = model_loader.get_model_list
+get_model_by_name = model_loader.get_model_by_name
+get_default_model = model_loader.get_default_model
+add_custom_model = model_loader.add_custom_model
+remove_custom_model = getattr(model_loader, "remove_custom_model", None)
 
 # Load environment variables
 load_dotenv()
@@ -216,6 +222,39 @@ def add_custom_model_dialog():
         else:
             st.error("Failed to save custom model config.")
 
+
+@st.dialog("Remove Custom Model")
+def remove_custom_model_dialog():
+    if remove_custom_model is None:
+        st.error("Current runtime does not expose remove_custom_model yet. Restart Streamlit to reload latest model_loader.")
+        return
+
+    config_models = [get_model_by_name(name) for name in get_model_list()]
+    custom_model_names = []
+    for model in config_models:
+        if not model:
+            continue
+        name = str(model.get("name", "")).strip()
+        desc = str(model.get("description", "")).strip().lower()
+        is_custom = name.endswith("(Custom)") or desc == "custom user-added model"
+        if is_custom:
+            custom_model_names.append(name)
+
+    if not custom_model_names:
+        st.info("No custom models available to remove.")
+        return
+
+    target_name = st.selectbox("Choose custom model to remove", custom_model_names)
+    if st.button("Remove", type="secondary"):
+        ok = remove_custom_model(target_name)
+        if ok:
+            remaining = get_model_list()
+            if st.session_state.selected_model == target_name and remaining:
+                st.session_state.selected_model = remaining[0]
+            st.rerun()
+        else:
+            st.error("Failed to remove model.")
+
 # ---------------------------------------------------------------------------
 # Session state initialization
 # ---------------------------------------------------------------------------
@@ -277,6 +316,9 @@ with st.sidebar:
 
     if st.button("➕ Add Custom Model", use_container_width=True):
         add_custom_model_dialog()
+
+    if st.button("➖ Remove Custom Model", use_container_width=True):
+        remove_custom_model_dialog()
 
     # Display model info
     selected_model_config = get_model_by_name(selected_model_name)
@@ -574,6 +616,25 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
         name="Grid",
         xgap=1,
         ygap=1,
+    ))
+
+    # Base marker (charging station) at corner (0, 0) with unique color.
+    fig.add_trace(go.Scatter(
+        x=[0],
+        y=[0],
+        mode="markers+text",
+        marker=dict(
+            size=16,
+            color="#FFD700",
+            symbol="square",
+            line=dict(width=2, color="#8B7500"),
+        ),
+        text=["BASE"],
+        textposition="bottom center",
+        textfont=dict(size=10, color="#8B7500"),
+        hovertext=["Charging Base (0, 0)"],
+        hoverinfo="text",
+        name="Base",
     ))
     
     # Add drone markers
@@ -988,9 +1049,9 @@ async def run_stream_agent(briefing: str, model_name: str = None):
         live_metrics_placeholder = st.empty()
     controller = MissionController(model_name=model_name)
 
-    async def refresh_live_sections() -> None:
+    async def refresh_live_sections(render_map: bool = False) -> None:
         now = time.time()
-        force_draw = now - st.session_state.get("last_live_render_ts", 0.0) >= 0.15
+        force_draw = render_map and (now - st.session_state.get("last_live_render_ts", 0.0) >= 0.01)
         state = await fetch_state_async()
         if not state:
             state = st.session_state.get("last_state")
@@ -1043,7 +1104,7 @@ async def run_stream_agent(briefing: str, model_name: str = None):
         full_log = ""
         # Clear out any previous paths directly here before we start rendering
         st.session_state.drone_paths = {}
-        await refresh_live_sections()
+        await refresh_live_sections(render_map=True)
         
         # Stream mission execution
         async for chunk in controller.stream_mission(briefing):
@@ -1079,13 +1140,20 @@ async def run_stream_agent(briefing: str, model_name: str = None):
                 elif event_type:
                     append_step_log(f"System event: {event_type}.")
 
-                await refresh_live_sections()
+                await refresh_live_sections(render_map=False)
             else:
                 full_log += chunk
+                should_render_map = False
                 for raw_line in chunk.splitlines():
+                    line = raw_line.strip()
+                    if line.startswith("TURN ") or line == "EXECUTION COMPLETE":
+                        should_render_map = True
                     interpreted = interpret_mission_line(raw_line)
                     if interpreted:
                         append_step_log(interpreted)
+
+                if should_render_map:
+                    await refresh_live_sections(render_map=True)
 
             await asyncio.sleep(0.01)
 
@@ -1099,7 +1167,7 @@ async def run_stream_agent(briefing: str, model_name: str = None):
             st.markdown("### MISSION LOG")
             st.code(full_log, language="text")
 
-        await refresh_live_sections()
+        await refresh_live_sections(render_map=True)
         
         status_placeholder.success("Mission complete!")
         
