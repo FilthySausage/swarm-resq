@@ -42,7 +42,7 @@ class InvalidActionError(AgentError):
 
 
 class RateLimitError(AgentError):
-    """Google Gemini API rate limit reached."""
+    """LLM API rate limit reached."""
     pass
 
 

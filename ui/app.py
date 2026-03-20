@@ -27,7 +27,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from orchestrator.model_loader import get_model_list, get_model_by_name, get_default_model
+from orchestrator.model_loader import get_model_list, get_model_by_name, get_default_model, add_custom_model
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -110,6 +110,34 @@ st.set_page_config(
 st.title("🚁 Swarm-ResQ — Command Center")
 st.caption("Real-time rescue drone swarm visualization & mission control")
 
+
+# ---------------------------------------------------------------------------
+# Custom Model Dialog
+# ---------------------------------------------------------------------------
+@st.dialog("Add Custom Model")
+def add_custom_model_dialog():
+    st.write("Register a new local or custom model.")
+    provider = st.text_input("Provider", value="Ollama")
+    model_id = st.text_input("Model ID", value="qwen2.5:3b")
+    base_url = st.text_input("Base URL", value="http://localhost:11434/v1")
+    
+    if st.button("Save", type="primary"):
+        new_model_name = f"{provider} {model_id} (Custom)"
+        new_model = {
+            "name": new_model_name,
+            "provider": provider,
+            "model_id": model_id,
+            "base_url": base_url,
+            "requires_key": False,
+            "description": "Custom user-added model"
+        }
+        success = add_custom_model(new_model)
+        if success:
+            st.session_state.selected_model = new_model_name
+            st.rerun()
+        else:
+            st.error("Failed to save custom model config.")
+
 # ---------------------------------------------------------------------------
 # Session state initialization
 # ---------------------------------------------------------------------------
@@ -158,7 +186,10 @@ with st.sidebar:
     if selected_model_name != st.session_state.selected_model:
         st.session_state.selected_model = selected_model_name
         st.success(f"✓ Model changed to: {selected_model_name}")
-    
+
+    if st.button("➕ Add Custom Model", use_container_width=True):
+        add_custom_model_dialog()
+
     # Display model info
     selected_model_config = get_model_by_name(selected_model_name)
     if selected_model_config:

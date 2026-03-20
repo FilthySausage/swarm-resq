@@ -3,7 +3,7 @@
 ### Multi-Agent Autonomous Rescue Swarm with LangChain & MCP
 
 > **Project Type:** AI-Powered Simulation  
-> **Stack:** Python, LangChain, FastMCP, Streamlit, Google Gemini  
+> **Stack:** Python, LangChain, FastMCP, Streamlit, OpenRouter / Ollama  
 > **Status:** ✅ Production-Ready
 
 ---
@@ -12,7 +12,7 @@
 
 **Swarm-ResQ** is a comprehensive autonomous rescue system that demonstrates multi-agent coordination using:
 
-- **LLM-Driven Decision Making**: Google Gemini 2.5 Flash powers Chain-of-Thought reasoning
+- **LLM-Driven Decision Making**: Qwen/Llama powers Chain-of-Thought reasoning
 - **Multi-Agent Coordination**: 3-5 drones coordinate without collisions or conflicts
 - **Persistent Memory**: Multi-turn context remembers explored areas, survivor locations, hazards
 - **Real-Time Streaming UI**: Live visualization of agent reasoning and mission progress
@@ -67,7 +67,7 @@
 
 ### Prerequisites
 - Python 3.9+
-- Google Gemini API Key (free tier at https://aistudio.google.com/app/apikey)
+- OpenRouter API Key for cloud models (free tier at https://openrouter.ai/) or local Ollama
 
 ### Installation
 
@@ -103,7 +103,7 @@ pip install -r requirements.txt
 4. **Configure Environment**
 ```bash
 cp .env.example .env
-# Edit .env and insert your GOOGLE_API_KEY
+# Edit .env and insert your OPENROUTER_API_KEY
 ```
 
 ### Running the System
@@ -315,8 +315,8 @@ METRICS:
 ### Environment Variables (`.env`)
 
 ```bash
-# Required: Google Gemini API Key
-GOOGLE_API_KEY=your_api_key_here
+# Required for Cloud AI (OpenRouter API Key)
+OPENROUTER_API_KEY=your_api_key_here
 
 # Optional: MCP Server URL (default: http://localhost:8000/mcp)
 MCP_SERVER_URL=http://localhost:8000/mcp
@@ -326,7 +326,7 @@ MCP_SERVER_URL=http://localhost:8000/mcp
 
 ```python
 # LLM model
-model="gemini-2.5-flash"  # Or use "gemini-pro" for higher quality
+model="qwen2.5:3b"  
 temperature=0  # Deterministic decisions
 
 # Agent loop parameters

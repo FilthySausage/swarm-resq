@@ -73,6 +73,32 @@ def load_models() -> Dict:
             "default_model": "llama2"
         }
 
+def add_custom_model(new_model: Dict) -> bool:
+    """
+    Add a custom model to config/models.json and save it
+    """
+    try:
+        if not MODELS_FILE.exists():
+            return False
+            
+        with open(MODELS_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            
+        # Optional: check if exists to avoid duplicates by name
+        for existing in config.get("models", []):
+            if existing.get("name") == new_model.get("name"):
+                # Update existing
+                existing.update(new_model)
+                break
+        else:
+            config["models"].append(new_model)
+            
+        with open(MODELS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error saving custom model: {e}")
+        return False
 
 def get_model_list() -> List[str]:
     """

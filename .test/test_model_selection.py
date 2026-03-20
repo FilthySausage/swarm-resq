@@ -48,8 +48,8 @@ def test_model_selection():
     
     # Test 5: Simulate user selection
     print("\n[Test 5] Simulate User Selection:")
-    print("  User selects: 'Google Gemma 2 9B (Free)'")
-    selected = get_model_by_name("Google Gemma 2 9B (Free)")
+    print("  User selects: 'Qwen 2.5 7B (Free)'")
+    selected = get_model_by_name("Qwen 2.5 7B (Free)")
     if selected:
         print(f"  Agent will use:")
         print(f"    Model ID: {selected['model_id']}")

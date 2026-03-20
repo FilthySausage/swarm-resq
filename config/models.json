@@ -38,22 +38,6 @@
       "description": "Fast and efficient, good for quick responses"
     },
     {
-      "name": "Google Gemma 2 9B (Free)",
-      "provider": "OpenRouter",
-      "model_id": "google/gemma-2-9b-it:free",
-      "base_url": "https://openrouter.ai/api/v1",
-      "requires_key": true,
-      "description": "Google's open model, balanced performance"
-    },
-    {
-      "name": "Mistral 7B (Free)",
-      "provider": "OpenRouter",
-      "model_id": "mistralai/mistral-7b-instruct:free",
-      "base_url": "https://openrouter.ai/api/v1",
-      "requires_key": true,
-      "description": "Efficient instruction-following model"
-    },
-    {
       "name": "Qwen 2.5 7B (Free)",
       "provider": "OpenRouter",
       "model_id": "qwen/qwen-2.5-7b-instruct:free",
@@ -68,8 +52,7 @@
       "base_url": "https://openrouter.ai/api/v1",
       "requires_key": true,
       "description": "Microsoft's compact model with long context"
-    }
-    ,
+    },
     {
       "name": "StepFun: Step 3.5 Flash (Free)",
       "provider": "OpenRouter",
@@ -85,6 +68,14 @@
       "base_url": "https://openrouter.ai/api/v1",
       "requires_key": true,
       "description": ""
+    },
+    {
+      "name": "OpenRouter nvidia/nemotron-3-nano-30b-a3b:free (Custom)",
+      "provider": "OpenRouter",
+      "model_id": "nvidia/nemotron-3-nano-30b-a3b:free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "requires_key": false,
+      "description": "Custom user-added model"
     }
   ],
   "default_model": "qwen2.5:3b",
