@@ -459,11 +459,8 @@ with st.sidebar:
 # Main layout
 # ---------------------------------------------------------------------------
 
-# Top row: Grid (full width)
-col_grid = st.container()
-
-# Middle row: Step Log + Metrics
-col_step_log, col_metrics = st.columns([1.2, 1])
+# Top row: Grid + Step Log + Status
+col_grid, col_step_log, col_metrics = st.columns([2, 1.2, 1])
 
 # Bottom row: Mission Log
 col_log = st.container()
