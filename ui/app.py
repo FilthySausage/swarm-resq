@@ -354,22 +354,16 @@ with st.sidebar:
     st.subheader("🌍 Environment Setup")
     env_locked = st.session_state.get("mission_active", False)
     
-    col_init1, col_init2 = st.columns(2)
-    with col_init1:
-        grid_width = st.number_input("Grid Width", 10, 50, 20, disabled=env_locked)
-    with col_init2:
-        grid_height = st.number_input("Grid Height", 10, 50, 20, disabled=env_locked)
+    grid_width = st.number_input("Grid Width", 10, 50, 20, disabled=env_locked)
+    grid_height = st.number_input("Grid Height", 10, 50, 20, disabled=env_locked)
     
-    col_init3, col_init4 = st.columns(2)
-    with col_init3:
-        drone_count = st.number_input("Number of Drones", 1, 10, 3, disabled=env_locked)
-    with col_init4:
-        survivor_count = st.number_input("Number of Survivors", 1, 20, 5, disabled=env_locked)
+    drone_count = st.number_input("Number of Drones", 1, 10, 3, disabled=env_locked)
+    survivor_count = st.number_input("Number of Survivors", 1, 20, 5, disabled=env_locked)
     
     init_btn = st.button(
         "🔧 Initialize Environment",
         disabled=env_locked,
-        width='stretch',
+        use_container_width=True,
     )
     
     if init_btn:
@@ -414,7 +408,7 @@ with st.sidebar:
             st.json(st.session_state.last_init_result)
     
     # Force cache refresh button (fixes attribute errors from cached old versions)
-    if st.button("🔄 Refresh Cache", width='stretch', help="Clear cached objects and reload"):
+    if st.button("🔄 Refresh Cache", use_container_width=True, help="Clear cached objects and reload"):
         st.cache_resource.clear()
         st.rerun()
     
@@ -435,13 +429,13 @@ with st.sidebar:
             "🚀 Launch ARIA",
             type="primary",
             disabled=st.session_state.mission_active or not st.session_state.environment_initialized,
-            width='stretch',
+            use_container_width=True,
         )
     with col2:
         stop_btn = st.button(
             "⏹️ Stop Mission",
             disabled=not st.session_state.mission_active,
-            width='stretch',
+            use_container_width=True,
         )
     
     st.divider()
@@ -600,11 +594,16 @@ def render_grid_plotly(grid_data: dict, drones: list, survivors: list, drone_pat
         zmin=0,
         zmax=4,
         colorscale=[
-            [0.0, "#FFFFFF"],   # Empty - white
-            [0.2, st.session_state.get("color_hazard", "#FF4444")],  # Hazard
-            [0.4, st.session_state.get("color_survivor", "#FF00FF")],   # Survivor
-            [0.6, st.session_state.get("color_obstacle", "#00AA00")],  # Obstacle
-            [1.0, "#87CEEB"],   # Scanned/Visited - sky blue
+            [0.0, "#FFFFFF"],
+            [0.125, "#FFFFFF"],
+            [0.125, st.session_state.get("color_hazard", "#FF4444")],
+            [0.375, st.session_state.get("color_hazard", "#FF4444")],
+            [0.375, st.session_state.get("color_survivor", "#FF00FF")],
+            [0.625, st.session_state.get("color_survivor", "#FF00FF")],
+            [0.625, st.session_state.get("color_obstacle", "#00AA00")],
+            [0.875, st.session_state.get("color_obstacle", "#00AA00")],
+            [0.875, "#87CEEB"],
+            [1.0, "#87CEEB"],
         ],
         colorbar=dict(
             title="Cell Type",
@@ -844,29 +843,29 @@ def render_mission_summary(state: dict) -> str:
     """Generate a brief mission summary."""
     drones = state.get("drones", [])
     grid = state.get("grid", {})
-    survivors_rescued = len(state.get("survivors_rescued", []))
-    
+    survivors_identified = len(st.session_state.get("identified_survivors", []))
+
     # Calculate grid exploration
     if grid and "cells" in grid:
         total_cells = len(grid["cells"]) * len(grid["cells"][0])
         explored = sum(
             1 for row in grid["cells"]
-            for cell in row if cell.get("type") != "."
+            for cell in row if cell.get("scanned", False)
         )
         explored_pct = (explored / max(1, total_cells)) * 100
     else:
         explored_pct = 0
-    
+
     # Drone status
     operational = sum(1 for d in drones if d.get("battery", 0) > 0)
     low_battery = sum(1 for d in drones if 0 < d.get("battery", 0) <= 20)
-    
+
     return f"""
     **Grid Explored:** {explored_pct:.1f}%
-    
+
     **Drones:** {operational}/{len(drones)} operational | {low_battery} low battery
-    
-    **Survivors Rescued:** {survivors_rescued}
+
+    **Survivors Identified:** {survivors_identified}
     """
 
 
@@ -898,7 +897,17 @@ def render_step_log_panel(container, max_items: int = 80) -> None:
         if logs:
             tail = logs[-max_items:]
             rows = [_step_log_to_row(i + 1, msg) for i, msg in enumerate(tail)]
-            st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+            st.dataframe(
+                pd.DataFrame(rows), 
+                use_container_width=False,
+                hide_index=True,
+                column_config={
+                    "Message": st.column_config.TextColumn(
+                        "Message",
+                        width="large",
+                    )
+                }
+            )
             
             if st.session_state.get("mission_complete", False):
                 if st.button("👁️ View Step Log File", use_container_width=True):
@@ -1050,9 +1059,15 @@ async def run_stream_agent(briefing: str, model_name: str = None):
     with col_grid:
         live_grid_placeholder = st.empty()
     with col_step_log:
-        live_step_log_placeholder = st.empty()
+        st.subheader("🧠 AI Step Log")
+        live_step_log_df_placeholder = st.empty()
     with col_metrics:
-        live_metrics_placeholder = st.empty()
+        st.subheader("📊 Mission Status")
+        live_status_txt = st.empty()
+        st.subheader("🚁 Drone Fleet")
+        live_drone_df = st.empty()
+        st.subheader("📍 Identified Survivor Coordinates")
+        live_survivor_df = st.empty()
     controller = MissionController(model_name=model_name)
 
     async def refresh_live_sections(render_map: bool = False) -> None:
@@ -1071,39 +1086,47 @@ async def run_stream_agent(briefing: str, model_name: str = None):
             st.session_state.drone_paths if st.session_state.show_paths else {},
         )
         if fig and force_draw:
-            live_key = f"live_grid_plot_{st.session_state.live_plot_seq}"
-            live_grid_placeholder.empty()
+            # Updating grid using placeholder directly
             live_grid_placeholder.plotly_chart(
                 fig,
-                width='stretch',
-                key=live_key,
+                use_container_width=True,
+                key=f"live_grid_plot_{st.session_state.live_plot_seq}",
             )
             st.session_state.live_plot_seq += 1
             st.session_state.last_live_render_ts = now
 
-        render_step_log_panel(live_step_log_placeholder)
+        # Update Step Log using placeholder directly
+        logs = st.session_state.get("step_logs", [])
+        if logs:
+            tail = logs[-80:]
+            rows = [_step_log_to_row(i + 1, msg) for i, msg in enumerate(tail)]
+            live_step_log_df_placeholder.dataframe(
+                pd.DataFrame(rows), 
+                use_container_width=False, 
+                hide_index=True,
+                column_config={"Message": st.column_config.TextColumn("Message", width="large")}
+            )
+        else:
+            live_step_log_df_placeholder.caption("No step logs yet. Launch mission to see AI thought + decisions.")
 
+        # Update Metrics using placeholders directly
+        live_status_txt.markdown(render_mission_summary(state))
 
-        live_metrics_placeholder.empty()
-        with live_metrics_placeholder.container():
-            st.subheader("📊 Mission Status")
-            st.markdown(render_mission_summary(state))
+        drone_df = render_drone_table(state.get("drones", []))
+        if not drone_df.empty:
+            live_drone_df.dataframe(drone_df, use_container_width=True, hide_index=True)
+        else:
+            live_drone_df.info("No drone data available")
 
-            st.subheader("🚁 Drone Fleet")
-            drone_df = render_drone_table(state.get("drones", []))
-            if not drone_df.empty:
-                st.dataframe(drone_df, width='stretch', hide_index=True)
+        if st.session_state.identified_survivors:
+            coords = sorted(
+                st.session_state.identified_survivors,
+                key=lambda c: (c["x"], c["y"]),
+            )
+            live_survivor_df.dataframe(pd.DataFrame(coords), use_container_width=True, hide_index=True)
+        else:
+            live_survivor_df.caption("No survivors identified yet.")
 
-            st.subheader("📍 Identified Survivor Coordinates")
-            if st.session_state.identified_survivors:
-                coords = sorted(
-                    st.session_state.identified_survivors,
-                    key=lambda c: (c["x"], c["y"]),
-                )
-                st.dataframe(pd.DataFrame(coords), width='stretch', hide_index=True)
-            else:
-                st.caption("No survivors identified yet.")
-    
     try:
         status_placeholder.info("Initializing AI and starting mission...")
         
@@ -1166,13 +1189,13 @@ async def run_stream_agent(briefing: str, model_name: str = None):
             st.session_state.mission_log = full_log
             with log_placeholder.container():
                 st.markdown("### 📋 ARIA Mission Log")
-                with st.container(height=300):
+                with st.container(height=600):
                     st.code(full_log[-5000:], language="text")
 
         # Final log update
         with log_placeholder.container():
             st.markdown("### 📋 ARIA Mission Log")
-            with st.container(height=300):
+            with st.container(height=600):
                 st.code(full_log, language="text")
         
         status_placeholder.success("Mission complete!")
@@ -1238,14 +1261,6 @@ if stop_btn:
 
 # Run agent if mission is active
 if st.session_state.mission_active and not st.session_state.mission_complete:
-    # Clear previous static panels before drawing live mission UI.
-    with col_grid:
-        st.empty()
-    with col_step_log:
-        st.empty()
-    with col_metrics:
-        st.empty()
-
     # Run the streaming agent with selected model
     agent_output = asyncio.run(run_stream_agent(mission_briefing, st.session_state.selected_model))
     st.session_state.mission_log = agent_output
@@ -1302,7 +1317,7 @@ else:
                     st.session_state.drone_paths if st.session_state.show_paths else {}
                 )
                 if fig:
-                    st.plotly_chart(fig, width='stretch', key="main_grid_plot")
+                    st.plotly_chart(fig, use_container_width=True, key="main_grid_plot")
                 else:
                     st.warning("Cannot render grid map.")
 
@@ -1317,7 +1332,7 @@ else:
             st.subheader("🚁 Drone Fleet")
             drone_df = render_drone_table(state.get("drones", []))
             if not drone_df.empty:
-                st.dataframe(drone_df, width='stretch', hide_index=True)
+                st.dataframe(drone_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No drone data available")
 
@@ -1327,7 +1342,7 @@ else:
                     st.session_state.identified_survivors,
                     key=lambda c: (c["x"], c["y"]),
                 )
-                st.dataframe(pd.DataFrame(coords), width='stretch', hide_index=True)
+                st.dataframe(pd.DataFrame(coords), use_container_width=True, hide_index=True)
             else:
                 st.caption("No survivors identified yet.")
     else:
