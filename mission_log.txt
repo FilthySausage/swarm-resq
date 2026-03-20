@@ -32,124 +32,64 @@ Drone Assignments (5):
   Action: search_continuous
   Reason: Auto-normalized assignment
   -> drone-2: Searching south_east (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 0%
+    [OK] moved 2 steps, stopped by max_steps, battery: 98%
 
 [drone-3]
   Action: search_continuous
   Reason: Auto-normalized assignment
   -> drone-3: Searching north_west (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 98%
+    [SURVIVOR] DETECTED at (12, 18)
+    [OK] moved 2 steps, stopped by detected_survivor, battery: 0%
 
 [drone-4]
   Action: search_continuous
   Reason: Auto-normalized assignment
   -> drone-4: Searching south_east (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 98%
+    [SURVIVOR] DETECTED at (2, 1)
+    [OK] moved 1 steps, stopped by detected_survivor, battery: 0%
 
 [drone-5]
   Action: search_continuous
   Reason: Auto-normalized assignment
   -> drone-5: Searching north_west (continuous)
-    [SURVIVOR] DETECTED at (5, 10)
+    [SURVIVOR] DETECTED at (10, 10)
     [OK] moved 1 steps, stopped by detected_survivor, battery: 0%
 
 ======================================================================
 EXECUTION COMPLETE
 ======================================================================
-Survivors discovered: 1
-  1. (5, 10)
-drone-1 moved to (14, 4). Battery is 99%.
-drone-1 moved to (13, 5). Battery is 98%.
-drone-2 moved to (17, 13). Battery is 99%.
-drone-2 moved to (18, 12). Battery is 98%.
-drone-3 moved to (6, 17). Battery is 99%.
-drone-3 moved to (5, 18). Battery is 98%.
-drone-4 moved to (5, 0). Battery is 99%.
-drone-4 moved to (6, 0). Battery is 98%.
-drone-5 moved to (5, 12). Battery is 99%.
-A survivor was detected at (5, 10).
-Discovered survivors so far: 1
-Coordinates: [{'x': 5, 'y': 10}]
+Survivors discovered: 3
+  1. (12, 18)
+  2. (2, 1)
+  3. (10, 10)
+drone-1 moved to (17, 9). Battery is 99%.
+drone-1 moved to (16, 10). Battery is 98%.
+drone-2 moved to (13, 2). Battery is 99%.
+drone-2 moved to (14, 1). Battery is 98%.
+drone-3 moved to (15, 17). Battery is 99%.
+drone-3 moved to (14, 18). Battery is 98%.
+A survivor was detected at (12, 18).
+drone-4 moved to (4, 1). Battery is 99%.
+A survivor was detected at (2, 1).
+drone-5 moved to (8, 10). Battery is 99%.
+A survivor was detected at (10, 10).
+Discovered survivors so far: 3
+Coordinates: [{'x': 12, 'y': 18}, {'x': 2, 'y': 1}, {'x': 10, 'y': 10}]
 Waiting 2.0s before next AI turn...
 
 ======================================================================
 TURN 2
 ======================================================================
 AI decision received for this turn. Executing movements...
-[OK] Plan parsed successfully: search_continuous strategy
-  Thought: Assign drones to explore unvisited areas while avoiding known obstacles and hazards....
-  Assignments: 5 drones
-
-======================================================================
-EXECUTING MISSION PLAN
-======================================================================
-Strategy: search_continuous
-Thought: Assign drones to explore unvisited areas while avoiding known obstacles and hazards.
-
-Drone Assignments (5):
-
-[drone-1]
-  Action: search_continuous
-  Reason: Auto-normalized assignment
-  -> drone-1: Searching north_west (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 0%
-
-[drone-2]
-  Action: search_continuous
-  Reason: Auto-normalized assignment
-  -> drone-2: Searching south_east (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 0%
-
-[drone-3]
-  Action: search_continuous
-  Reason: Auto-normalized assignment
-  -> drone-3: Searching north_east (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 0%
-
-[drone-4]
-  Action: search_continuous
-  Reason: Auto-normalized assignment
-  -> drone-4: Searching south_west (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 96%
-
-[drone-5]
-  Action: search_continuous
-  Reason: Auto-normalized assignment
-  -> drone-5: Searching north (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 97%
-
-======================================================================
-EXECUTION COMPLETE
-======================================================================
-Survivors discovered: 1
-  1. (5, 10)
-drone-1 moved to (12, 6). Battery is 97%.
-drone-1 moved to (11, 7). Battery is 96%.
-drone-2 moved to (19, 11). Battery is 97%.
-drone-2 moved to (18, 11). Battery is 96%.
-drone-3 moved to (6, 19). Battery is 97%.
-drone-3 moved to (7, 19). Battery is 96%.
-drone-4 moved to (5, 0). Battery is 97%.
-drone-4 moved to (4, 0). Battery is 96%.
-drone-5 moved to (5, 13). Battery is 98%.
-drone-5 moved to (5, 14). Battery is 97%.
-Discovered survivors so far: 1
-Coordinates: [{'x': 5, 'y': 10}]
-Waiting 2.0s before next AI turn...
-
-======================================================================
-TURN 3
-======================================================================
-AI decision received for this turn. Executing movements...
 [OK] Plan parsed successfully: unvisited_areas strategy
-  Thought: Ensure drones explore different areas to avoid collisions and prioritize unvisited cells....
+  Thought: Ensure drones explore unvisited areas while avoiding collisions and obstacles....
   Assignments: 5 drones
 
 ======================================================================
 EXECUTING MISSION PLAN
 ======================================================================
 Strategy: unvisited_areas
-Thought: Ensure drones explore different areas to avoid collisions and prioritize unvisited cells.
+Thought: Ensure drones explore unvisited areas while avoiding collisions and obstacles.
 
 Drone Assignments (5):
 
@@ -169,26 +109,33 @@ Drone Assignments (5):
   Action: search_continuous
   Reason: Auto-normalized assignment
   -> drone-3: Searching north_west (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 94%
+    [OK] moved 2 steps, stopped by max_steps, battery: 96%
 
 [drone-4]
   Action: search_continuous
   Reason: Auto-normalized assignment
   -> drone-4: Searching south_east (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 94%
+    [OK] moved 2 steps, stopped by max_steps, battery: 97%
 
 [drone-5]
   Action: search_continuous
   Reason: Auto-normalized assignment
   -> drone-5: Searching north_west (continuous)
-    [OK] moved 2 steps, stopped by max_steps, battery: 95%
+    [OK] moved 2 steps, stopped by max_steps, battery: 0%
 
 ======================================================================
 EXECUTION COMPLETE
 ======================================================================
-Survivors discovered: 1
-  1. (5, 10)
-drone-1 moved to (10, 8). Battery is 95%.
-drone-1 moved to (10, 9). Battery is 94%.
-drone-2 moved to (19, 10). Battery is 95%.
-drone-2 moved to (18, 10). Battery is 94%.
+Survivors discovered: 3
+  1. (12, 18)
+  2. (2, 1)
+  3. (10, 10)
+drone-1 moved to (15, 11). Battery is 97%.
+drone-1 moved to (14, 12). Battery is 96%.
+drone-2 moved to (15, 0). Battery is 97%.
+drone-2 moved to (14, 0). Battery is 96%.
+drone-3 moved to (13, 19). Battery is 97%.
+drone-3 moved to (12, 19). Battery is 96%.
+drone-4 moved to (5, 0). Battery is 98%.
+drone-4 moved to (6, 0). Battery is 97%.
+drone-5 moved to (7, 11). Battery is 98%.

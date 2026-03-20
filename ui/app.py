@@ -352,9 +352,8 @@ with st.sidebar:
     
     # Environment initialization
     st.subheader("🌍 Environment Setup")
-    env_locked = st.session_state.environment_initialized
-    if env_locked:
-        st.caption("Environment is locked after initialization. Restart app to create a new map.")
+    env_locked = st.session_state.get("mission_active", False)
+    
     col_init1, col_init2 = st.columns(2)
     with col_init1:
         grid_width = st.number_input("Grid Width", 10, 50, 20, disabled=env_locked)
@@ -885,6 +884,10 @@ def render_step_log_panel(container, max_items: int = 80) -> None:
             tail = logs[-max_items:]
             rows = [_step_log_to_row(i + 1, msg) for i, msg in enumerate(tail)]
             st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+            
+            if st.session_state.get("mission_complete", False):
+                if st.button("👁️ View Step Log File", use_container_width=True):
+                    view_log_modal("Step Log", "step_log.txt")
         else:
             st.caption("No step logs yet. Launch mission to see AI thought + decisions.")
 
@@ -1147,15 +1150,15 @@ async def run_stream_agent(briefing: str, model_name: str = None):
 
             st.session_state.mission_log = full_log
             with log_placeholder.container():
-                st.markdown("### MISSION LOG")
-                st.code(full_log[-5000:], language="text")
-        
+                st.markdown("### 📋 ARIA Mission Log")
+                with st.container(height=300):
+                    st.code(full_log[-5000:], language="text")
+
         # Final log update
         with log_placeholder.container():
-            st.markdown("### MISSION LOG")
-            st.code(full_log, language="text")
-
-        await refresh_live_sections(render_map=True)
+            st.markdown("### 📋 ARIA Mission Log")
+            with st.container(height=300):
+                st.code(full_log, language="text")
         
         status_placeholder.success("Mission complete!")
         
@@ -1173,9 +1176,10 @@ async def run_stream_agent(briefing: str, model_name: str = None):
         else:
             status_placeholder.error(f"Mission failed: {e}")
         with log_placeholder.container():
-            st.markdown("### MISSION LOG")
-            st.code(full_log, language="text")
-    
+            st.markdown("### 📋 ARIA Mission Log")
+            with st.container(height=600):
+                st.code(full_log, language="text")
+
     st.session_state.mission_log = full_log
     return full_log
 
@@ -1247,7 +1251,8 @@ if st.session_state.mission_active and not st.session_state.mission_complete:
 if st.session_state.mission_log:
     with col_log:
         st.markdown("### 📋 ARIA Mission Log")
-        st.code(st.session_state.mission_log, language="text")
+        with st.container(height=600):
+            st.code(st.session_state.mission_log, language="text")
 
 # ---------------------------------------------------------------------------
 # Grid and status display
@@ -1361,16 +1366,4 @@ if st.checkbox("Show debug info"):
         st.json(state if state else {})
 
 # ---------------------------------------------------------------------------
-# View Log Files
-# ---------------------------------------------------------------------------
-if st.session_state.mission_complete:
-    st.divider()
-    st.subheader("📄 View Saved Log Files")
-    col_log1, col_log2 = st.columns(2)
-    with col_log1:
-        if st.button("👁️ View Mission Log File", use_container_width=True):
-            view_log_modal("Mission Log", "mission_log.txt")
-    with col_log2:
-        if st.button("👁️ View Step Log File", use_container_width=True):
-            view_log_modal("Step Log", "step_log.txt")
 
